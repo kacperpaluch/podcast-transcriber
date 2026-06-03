@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Podcast Transcriber</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+  .layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  nav { background: #1e293b; padding: 24px 0; display: flex; flex-direction: column; gap: 4px; }
+  nav .logo { padding: 0 20px 20px; font-size: 15px; font-weight: 700; color: #38bdf8; border-bottom: 1px solid #334155; margin-bottom: 8px; }
+  nav a { display: block; padding: 10px 20px; color: #94a3b8; text-decoration: none; font-size: 14px; border-radius: 0; transition: all .15s; cursor: pointer; }
+  nav a:hover, nav a.active { background: #334155; color: #f1f5f9; }
+  main { padding: 32px; max-width: 960px; }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 24px; color: #f1f5f9; }
+  h2 { font-size: 16px; font-weight: 600; color: #cbd5e1; margin-bottom: 16px; }
+  .card { background: #1e293b; border-radius: 10px; padding: 24px; margin-bottom: 24px; border: 1px solid #334155; }
+  .form-row { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .form-group { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 180px; }
+  label { font-size: 12px; color: #94a3b8; font-weight: 500; text-transform: uppercase; letter-spacing: .05em; }
+  input, select { background: #0f172a; border: 1px solid #334155; color: #f1f5f9; padding: 9px 12px; border-radius: 6px; font-size: 14px; outline: none; transition: border-color .15s; }
+  input:focus, select:focus { border-color: #38bdf8; }
+  button { padding: 9px 18px; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; transition: all .15s; }
+  .btn-primary { background: #0284c7; color: #fff; }
+  .btn-primary:hover { background: #0369a1; }
+  .btn-danger { background: #dc2626; color: #fff; }
+  .btn-danger:hover { background: #b91c1c; }
+  .btn-sm { padding: 5px 12px; font-size: 12px; }
+  .btn-ghost { background: #334155; color: #cbd5e1; }
+  .btn-ghost:hover { background: #475569; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; padding: 10px 12px; color: #64748b; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid #334155; }
+  td { padding: 12px 12px; border-bottom: 1px solid #1e293b; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #1e293b; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+  .badge-queued { background: #1e3a5f; color: #93c5fd; }
+  .badge-transcribing { background: #422006; color: #fb923c; }
+  .badge-done { background: #14532d; color: #86efac; }
+  .badge-error { background: #450a0a; color: #fca5a5; }
+  .badge-enabled { background: #14532d; color: #86efac; }
+  .badge-disabled { background: #1e293b; color: #64748b; }
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 16px; }
+  .stat { background: #0f172a; border-radius: 8px; padding: 16px; text-align: center; }
+  .stat-num { font-size: 28px; font-weight: 700; color: #38bdf8; }
+  .stat-label { font-size: 12px; color: #64748b; margin-top: 4px; }
+  .alert { padding: 12px 16px; border-radius: 6px; font-size: 13px; margin-bottom: 16px; }
+  .alert-success { background: #14532d; color: #86efac; border: 1px solid #166534; }
+  .alert-error { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
+  .toggle { position: relative; display: inline-block; width: 40px; height: 22px; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; inset: 0; background: #334155; border-radius: 22px; cursor: pointer; transition: .2s; }
+  .slider::before { content:''; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+  input:checked + .slider { background: #0284c7; }
+  input:checked + .slider::before { transform: translateX(18px); }
+  .section { display: none; }
+  .section.active { display: block; }
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 100; align-items: center; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: #1e293b; border-radius: 10px; padding: 28px; max-width: 600px; width: 90%; border: 1px solid #334155; max-height: 80vh; overflow-y: auto; }
+  .modal h2 { margin-bottom: 16px; }
+  .transcript-text { white-space: pre-wrap; font-size: 13px; line-height: 1.7; color: #cbd5e1; background: #0f172a; padding: 16px; border-radius: 6px; max-height: 400px; overflow-y: auto; }
+  .empty-state { text-align: center; padding: 40px; color: #475569; }
+  .progress-bar { height: 8px; background: #1e293b; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, #0284c7, #38bdf8); border-radius: 4px; transition: width .5s ease; }
+  .active-card { border-color: #0284c7 !important; animation: pulse-border 2s infinite; }
+  @keyframes pulse-border { 0%,100% { border-color: #0284c7; } 50% { border-color: #38bdf8; } }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <div class="logo">🎙 Podcast<br>Transcriber</div>
+    <a class="active" data-section="dashboard" onclick="showSection('dashboard', this)">Panel główny</a>
+    <a data-section="feeds" onclick="showSection('feeds', this)">Kanały RSS</a>
+    <a data-section="episodes" onclick="showSection('episodes', this)">Odcinki</a>
+    <a data-section="history" onclick="showSection('history', this)">Historia webhooków</a>
+    <a data-section="settings" onclick="showSection('settings', this)">Ustawienia</a>
+  </nav>
+
+  <main>
+    <!-- DASHBOARD -->
+    <div id="section-dashboard" class="section active">
+      <h1>Panel główny</h1>
+      <div class="card">
+        <h2>Statystyki</h2>
+        <div class="stat-grid" id="stats-grid">
+          <div class="stat"><div class="stat-num" id="stat-feeds">–</div><div class="stat-label">Aktywne kanały</div></div>
+          <div class="stat"><div class="stat-num" id="stat-queued">–</div><div class="stat-label">W kolejce</div></div>
+          <div class="stat"><div class="stat-num" id="stat-transcribing">–</div><div class="stat-label">Transkrybowane</div></div>
+          <div class="stat"><div class="stat-num" id="stat-done">–</div><div class="stat-label">Gotowe</div></div>
+          <div class="stat"><div class="stat-num" id="stat-error">–</div><div class="stat-label">Błędy</div></div>
+        </div>
+      </div>
+      <div id="active-transcription-card" style="display:none" class="card active-card">
+        <h2>Aktywna transkrypcja</h2>
+        <div id="active-feed-name" style="font-size:12px;color:#64748b;margin-bottom:4px"></div>
+        <div id="active-episode-title" style="font-weight:600;margin-bottom:10px"></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;color:#94a3b8;margin-bottom:4px">
+          <span id="active-pct-label">Ładowanie...</span>
+          <span id="active-time-label"></span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="active-progress-fill" style="width:0%"></div></div>
+      </div>
+      <div class="card">
+        <h2>Ostatnie odcinki</h2>
+        <div id="recent-episodes"></div>
+      </div>
+    </div>
+
+    <!-- HISTORY -->
+    <div id="section-history" class="section">
+      <h1>Historia webhooków</h1>
+      <div class="card">
+        <div id="webhook-log-table"></div>
+      </div>
+    </div>
+
+    <!-- FEEDS -->
+    <div id="section-feeds" class="section">
+      <h1>Kanały RSS</h1>
+      <div class="card">
+        <h2>Dodaj kanał</h2>
+        <div id="feed-alert"></div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Nazwa kanału (własna)</label>
+            <input id="feed-name" type="text" placeholder="np. Huberman Lab">
+          </div>
+          <div class="form-group">
+            <label>URL RSS</label>
+            <input id="feed-url" type="url" placeholder="https://...">
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <button class="btn-primary" onclick="addFeed()">Dodaj</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Lista kanałów</h2>
+        <div id="feeds-table"></div>
+      </div>
+    </div>
+
+    <!-- EPISODES -->
+    <div id="section-episodes" class="section">
+      <h1>Odcinki</h1>
+      <div class="card" style="padding:16px 24px">
+        <div class="form-row" style="margin:0;gap:12px;align-items:flex-end">
+          <div class="form-group" style="min-width:140px;max-width:200px">
+            <label>Status</label>
+            <select id="filter-status" onchange="loadEpisodes()">
+              <option value="">Wszystkie</option>
+              <option value="queued">W kolejce</option>
+              <option value="transcribing">Transkrybowanie</option>
+              <option value="done">Gotowe</option>
+              <option value="error">Błąd</option>
+            </select>
+          </div>
+          <div class="form-group" style="min-width:140px;max-width:200px">
+            <label>Kanał</label>
+            <select id="filter-feed" onchange="loadEpisodes()">
+              <option value="">Wszystkie</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div id="episodes-table"></div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div id="section-settings" class="section">
+      <h1>Ustawienia</h1>
+      <div class="card">
+        <h2>Konfiguracja</h2>
+        <div id="settings-alert"></div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Interwał sprawdzania RSS (minuty)</label>
+            <input id="s-interval" type="number" min="1" max="1440">
+          </div>
+          <div class="form-group">
+            <label>Model transkrypcji</label>
+            <select id="s-model">
+              <option value="large-v3-turbo">large-v3-turbo (zalecany)</option>
+              <option value="large-v3">large-v3</option>
+              <option value="medium">medium</option>
+              <option value="small">small</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:20px">
+          <label>URL webhooka n8n</label>
+          <input id="s-webhook" type="url" placeholder="https://n8n.example.com/webhook/...">
+        </div>
+        <button class="btn-primary" onclick="saveSettings()">Zapisz ustawienia</button>
+      </div>
+      <div class="card">
+        <h2>Test webhooka</h2>
+        <p style="font-size:13px;color:#94a3b8;margin-bottom:16px">Wysyła przykładowy payload na skonfigurowany URL webhooka — przydatne do weryfikacji n8n.</p>
+        <div id="webhook-test-result"></div>
+        <button class="btn-ghost" onclick="testWebhook()" id="btn-test-webhook">Wyślij testowego webhooka</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- TRANSCRIPT MODAL -->
+<div class="modal-overlay" id="transcript-modal" onclick="closeModal(event)">
+  <div class="modal">
+    <h2 id="modal-title">Transkrypcja</h2>
+    <div class="transcript-text" id="modal-content"></div>
+    <div style="margin-top:16px;text-align:right">
+      <button class="btn-ghost" onclick="document.getElementById('transcript-modal').classList.remove('open')">Zamknij</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function showSection(name, el) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+  $('section-' + name).classList.add('active');
+  el.classList.add('active');
+  if (name === 'dashboard') loadDashboard();
+  if (name === 'feeds') loadFeeds();
+  if (name === 'episodes') loadEpisodes();
+  if (name === 'history') loadHistory();
+  if (name === 'settings') loadSettings();
+}
+
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: r.statusText }));
+    throw new Error(err.detail || r.statusText);
+  }
+  if (r.status === 204) return null;
+  return r.json();
+}
+
+function statusBadge(s) {
+  const labels = { queued: 'W kolejce', transcribing: 'Transkrybowanie', done: 'Gotowe', error: 'Błąd' };
+  return `<span class="badge badge-${s}">${labels[s] || s}</span>`;
+}
+
+function fmtDur(sec) {
+  if (!sec) return '–';
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60);
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function fmtDate(s) {
+  if (!s) return '–';
+  try { return new Date(s).toLocaleString('pl-PL', { dateStyle:'short', timeStyle:'short' }); }
+  catch { return s; }
+}
+
+// Dashboard
+let progressTimer = null;
+
+async function loadDashboard() {
+  try {
+    const stats = await api('GET', '/api/stats');
+    $('stat-feeds').textContent = stats.active_feeds ?? 0;
+    const ep = stats.episodes || {};
+    $('stat-queued').textContent = ep.queued ?? 0;
+    $('stat-transcribing').textContent = ep.transcribing ?? 0;
+    $('stat-done').textContent = ep.done ?? 0;
+    $('stat-error').textContent = ep.error ?? 0;
+  } catch {}
+  try {
+    const episodes = await api('GET', '/api/episodes?limit=10');
+    if (!episodes.length) {
+      $('recent-episodes').innerHTML = '<div class="empty-state">Brak odcinków</div>';
+    } else {
+      $('recent-episodes').innerHTML = buildEpisodesTable(episodes, false);
+    }
+  } catch {}
+  refreshActiveTranscription();
+}
+
+async function refreshActiveTranscription() {
+  clearTimeout(progressTimer);
+  try {
+    const active = await api('GET', '/api/episodes/active');
+    const card = $('active-transcription-card');
+    if (!active) {
+      card.style.display = 'none';
+      return;
+    }
+    card.style.display = 'block';
+    $('active-feed-name').textContent = active.feed_name || '';
+    $('active-episode-title').textContent = active.rss_title || '(bez tytułu)';
+
+    const pct = active.progress_pct;
+    const dur = active.duration_seconds || 0;
+    const done = active.transcribed_seconds || 0;
+
+    if (pct !== null && pct !== undefined) {
+      $('active-pct-label').textContent = `${pct}% przetworzone`;
+      $('active-progress-fill').style.width = pct + '%';
+    } else {
+      $('active-pct-label').textContent = 'Inicjalizacja modelu...';
+      $('active-progress-fill').style.width = '0%';
+    }
+
+    if (dur > 0) {
+      $('active-time-label').textContent = `${fmtDur(done)} / ${fmtDur(dur)}`;
+    } else {
+      $('active-time-label').textContent = '';
+    }
+
+    // Odśwież co 15s dopóki trwa transkrypcja
+    progressTimer = setTimeout(refreshActiveTranscription, 15000);
+  } catch {
+    $('active-transcription-card').style.display = 'none';
+  }
+}
+
+// Feeds
+async function loadFeeds() {
+  try {
+    const feeds = await api('GET', '/api/feeds');
+    if (!feeds.length) {
+      $('feeds-table').innerHTML = '<div class="empty-state">Brak kanałów — dodaj pierwszy powyżej</div>';
+      return;
+    }
+    $('feeds-table').innerHTML = `
+      <table>
+        <thead><tr>
+          <th>Nazwa</th><th>URL RSS</th><th>Tytuł z RSS</th><th>Aktywny</th><th>Akcje</th>
+        </tr></thead>
+        <tbody>${feeds.map(f => `
+          <tr>
+            <td><strong>${esc(f.display_name)}</strong></td>
+            <td style="font-size:12px;color:#64748b;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.url)}</td>
+            <td style="font-size:12px;color:#94a3b8">${esc(f.rss_feed_title || '–')}</td>
+            <td><label class="toggle"><input type="checkbox" ${f.enabled?'checked':''} onchange="toggleFeed(${f.id}, this.checked)"><span class="slider"></span></label></td>
+            <td style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn-ghost btn-sm" onclick="fetchLatest(${f.id}, this)" title="Pobierz ostatni odcinek z RSS i dodaj do kolejki">Pobierz ostatni</button>
+              <button class="btn-danger btn-sm" onclick="deleteFeed(${f.id})">Usuń</button>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch(e) {
+    $('feeds-table').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+  }
+}
+
+async function addFeed() {
+  const name = $('feed-name').value.trim();
+  const url = $('feed-url').value.trim();
+  $('feed-alert').innerHTML = '';
+  try {
+    await api('POST', '/api/feeds', { display_name: name, url });
+    $('feed-name').value = '';
+    $('feed-url').value = '';
+    $('feed-alert').innerHTML = '<div class="alert alert-success">Kanał dodany</div>';
+    loadFeeds();
+  } catch(e) {
+    $('feed-alert').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+  }
+}
+
+async function toggleFeed(id, enabled) {
+  try { await api('PATCH', `/api/feeds/${id}`, { enabled }); }
+  catch(e) { alert(e.message); loadFeeds(); }
+}
+
+async function deleteFeed(id) {
+  if (!confirm('Usunąć kanał? Wszystkie powiązane odcinki zostaną usunięte.')) return;
+  try { await api('DELETE', `/api/feeds/${id}`); loadFeeds(); }
+  catch(e) { alert(e.message); }
+}
+
+// Episodes
+async function loadEpisodes() {
+  try {
+    const feeds = await api('GET', '/api/feeds');
+    const sel = $('filter-feed');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">Wszystkie</option>' +
+      feeds.map(f => `<option value="${f.id}" ${prev==f.id?'selected':''}>${esc(f.display_name)}</option>`).join('');
+  } catch {}
+  try {
+    const status = $('filter-status').value;
+    const feedId = $('filter-feed').value;
+    let url = '/api/episodes?limit=100';
+    if (status) url += `&status=${status}`;
+    if (feedId) url += `&feed_id=${feedId}`;
+    const episodes = await api('GET', url);
+    if (!episodes.length) {
+      $('episodes-table').innerHTML = '<div class="empty-state">Brak odcinków dla wybranych filtrów</div>';
+      return;
+    }
+    $('episodes-table').innerHTML = buildEpisodesTable(episodes, true);
+  } catch(e) {
+    $('episodes-table').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+  }
+}
+
+function buildEpisodesTable(episodes, showActions) {
+  return `<table>
+    <thead><tr>
+      <th>Tytuł</th><th>Kanał</th><th>Status</th><th>Czas</th><th>Data</th>${showActions ? '<th>Akcje</th>' : ''}
+    </tr></thead>
+    <tbody>${episodes.map(e => `
+      <tr>
+        <td style="max-width:300px"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.rss_title||'')}">
+          ${esc(e.rss_title || '(bez tytułu)')}</span>
+          ${e.error ? `<span style="font-size:11px;color:#f87171">${esc(e.error)}</span>` : ''}
+        </td>
+        <td style="font-size:13px;color:#94a3b8">${esc(e.feed_name||'')}</td>
+        <td>${statusBadge(e.status)}</td>
+        <td style="font-size:13px">${fmtDur(e.duration_seconds)}</td>
+        <td style="font-size:12px;color:#64748b">${fmtDate(e.published_at || e.created_at)}</td>
+        ${showActions ? `<td style="display:flex;gap:6px;flex-wrap:wrap">
+          ${e.status === 'done' ? `<button class="btn-ghost btn-sm" onclick="showTranscript(${e.id}, ${JSON.stringify(esc(e.rss_title||''))})">Transkrypcja</button>` : ''}
+          ${e.status === 'error' ? `<button class="btn-primary btn-sm" onclick="retryEpisode(${e.id})">Ponów</button>` : ''}
+        </td>` : ''}
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+async function showTranscript(id, title) {
+  $('modal-title').textContent = title;
+  $('modal-content').textContent = 'Ładowanie...';
+  $('transcript-modal').classList.add('open');
+  try {
+    const data = await api('GET', `/api/episodes/${id}/transcript`);
+    $('modal-content').textContent = data.transcript || '(brak transkrypcji)';
+  } catch(e) {
+    $('modal-content').textContent = 'Błąd: ' + e.message;
+  }
+}
+
+function closeModal(e) {
+  if (e.target === $('transcript-modal')) $('transcript-modal').classList.remove('open');
+}
+
+async function retryEpisode(id) {
+  try {
+    await api('POST', `/api/episodes/${id}/retry`);
+    loadEpisodes();
+  } catch(e) { alert(e.message); }
+}
+
+// Settings
+async function loadSettings() {
+  try {
+    const s = await api('GET', '/api/settings');
+    $('s-interval').value = s.check_interval_minutes || 30;
+    $('s-model').value = s.whisper_model || 'large-v3-turbo';
+    $('s-webhook').value = s.webhook_url || '';
+  } catch {}
+}
+
+async function saveSettings() {
+  $('settings-alert').innerHTML = '';
+  try {
+    await api('PUT', '/api/settings', {
+      check_interval_minutes: parseInt($('s-interval').value),
+      whisper_model: $('s-model').value,
+      webhook_url: $('s-webhook').value,
+    });
+    $('settings-alert').innerHTML = '<div class="alert alert-success">Ustawienia zapisane</div>';
+  } catch(e) {
+    $('settings-alert').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+  }
+}
+
+// Webhook history
+async function loadHistory() {
+  const el = $('webhook-log-table');
+  el.innerHTML = '<div class="empty-state">Ładowanie...</div>';
+  try {
+    const rows = await api('GET', '/api/webhook/log?limit=100');
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty-state">Brak wysłanych webhooków</div>';
+      return;
+    }
+    el.innerHTML = `<table>
+      <thead><tr>
+        <th>Data</th><th>Odcinek</th><th>Kanał</th><th>Status HTTP</th><th>Wynik</th><th>Błąd</th><th></th>
+      </tr></thead>
+      <tbody>${rows.map(r => `
+        <tr>
+          <td style="font-size:12px;white-space:nowrap">${fmtDate(r.sent_at)}</td>
+          <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.rss_title||'')}">${esc(r.rss_title || '(bez tytułu)')}</td>
+          <td style="font-size:13px;color:#94a3b8">${esc(r.feed_name||'')}</td>
+          <td style="font-size:13px">${r.status_code || '–'}</td>
+          <td><span class="badge ${r.ok ? 'badge-done' : 'badge-error'}">${r.ok ? 'OK' : 'Błąd'}</span></td>
+          <td style="font-size:12px;color:#f87171;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.error||'')}">${esc(r.error||'')}</td>
+          <td><button class="btn-ghost btn-sm" onclick="resendWebhook(${r.episode_id}, this)">Wyślij</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  } catch(e) {
+    el.innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+  }
+}
+
+async function resendWebhook(episodeId, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Wysyłam...';
+  try {
+    const data = await api('POST', `/api/episodes/${episodeId}/send-webhook`);
+    if (data.ok) {
+      btn.textContent = '✓ Wysłano';
+      btn.style.color = '#86efac';
+    } else {
+      btn.textContent = `HTTP ${data.status_code || '?'}`;
+      btn.style.color = '#fb923c';
+      // Pokaż hint co zrobić przy 404 od n8n
+      if (data.status_code === 404) {
+        showWebhookHint();
+      }
+    }
+    setTimeout(() => { btn.textContent = orig; btn.style.color = ''; btn.disabled = false; loadHistory(); }, 3000);
+  } catch(e) {
+    btn.textContent = 'Błąd';
+    btn.style.color = '#f87171';
+    setTimeout(() => { btn.textContent = orig; btn.style.color = ''; btn.disabled = false; }, 2500);
+    alert('Błąd połączenia z webhookiem: ' + e.message);
+  }
+}
+
+function showWebhookHint() {
+  const el = $('webhook-log-table');
+  const existing = el.querySelector('.webhook-hint');
+  if (existing) return;
+  const hint = document.createElement('div');
+  hint.className = 'alert webhook-hint';
+  hint.style.cssText = 'background:#422006;color:#fb923c;border:1px solid #92400e;margin-bottom:12px;font-size:13px';
+  hint.innerHTML = '<strong>n8n zwrócił 404</strong> — workflow nie jest aktywny. W n8n otwórz workflow i przełącz go w tryb <strong>Production</strong> (przełącznik obok przycisku Save).';
+  el.insertBefore(hint, el.firstChild);
+  setTimeout(() => hint.remove(), 8000);
+}
+
+// Fetch latest episode
+async function fetchLatest(feedId, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Pobieram...';
+  try {
+    const data = await api('POST', `/api/feeds/${feedId}/fetch-latest`);
+    const msg = data.message || (data.queued ? 'Dodano do kolejki' : 'Już w kolejce');
+    // Krótkie wizualne potwierdzenie na przycisku
+    btn.textContent = data.queued ? '✓ Dodano' : '— Już jest';
+    btn.style.color = data.queued ? '#86efac' : '#94a3b8';
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.style.color = '';
+      btn.disabled = false;
+    }, 2500);
+    // Odśwież listę odcinków jeśli jesteśmy na tej zakładce
+    if ($('section-episodes').classList.contains('active')) loadEpisodes();
+  } catch(e) {
+    btn.textContent = 'Błąd';
+    btn.style.color = '#f87171';
+    setTimeout(() => { btn.textContent = orig; btn.style.color = ''; btn.disabled = false; }, 3000);
+    // Pokaż szczegóły błędu w alertcie feeds
+    $('feed-alert').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+  }
+}
+
+// Test webhook
+async function testWebhook() {
+  const btn = $('btn-test-webhook');
+  const res = $('webhook-test-result');
+  btn.disabled = true;
+  btn.textContent = 'Wysyłam...';
+  res.innerHTML = '';
+  try {
+    const data = await api('POST', '/api/webhook/test');
+    const ok = data.ok;
+    res.innerHTML = `<div class="alert ${ok ? 'alert-success' : 'alert-error'}">
+      HTTP ${data.status_code} — ${ok ? 'Webhook dotarł poprawnie' : 'Serwer zwrócił błąd'}
+      ${data.response ? `<pre style="margin-top:8px;font-size:11px;white-space:pre-wrap;opacity:.8">${esc(data.response)}</pre>` : ''}
+    </div>`;
+  } catch(e) {
+    res.innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Wyślij testowego webhooka';
+  }
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Init
+loadDashboard();
+</script>
+</body>
+</html>

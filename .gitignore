@@ -1,0 +1,34 @@
+# Dane aplikacji — generowane w czasie działania
+data/app.db
+data/audio/*
+data/models/*
+!data/audio/.gitkeep
+!data/models/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Edytory
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker
+*.log

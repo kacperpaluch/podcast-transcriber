@@ -1,0 +1,54 @@
+# Docker Compose dla Portainer / wdrożenie bez budowania lokalnego
+# Używa gotowych obrazów z Docker Hub: kpa90/podcast-*
+#
+# PRZED URUCHOMIENIEM ustaw zmienną HOST_DATA_PATH na absolutną ścieżkę
+# do katalogu danych na hoście, np.: /home/pi/podcast-data
+# W Portainerze: Stacks → Add stack → wklej ten plik → ustaw zmienne środowiskowe
+
+name: podcast
+
+services:
+  web:
+    image: kpa90/podcast-web:latest
+    container_name: podcast-web
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - podcast_data:/data
+    environment:
+      - DB_PATH=/data/app.db
+    mem_limit: 300m
+
+  scheduler:
+    image: kpa90/podcast-scheduler:latest
+    container_name: podcast-scheduler
+    restart: unless-stopped
+    volumes:
+      - podcast_data:/data
+    environment:
+      - DB_PATH=/data/app.db
+    mem_limit: 200m
+
+  worker-controller:
+    image: kpa90/podcast-worker-controller:latest
+    container_name: podcast-worker-controller
+    restart: unless-stopped
+    volumes:
+      - podcast_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DB_PATH=/data/app.db
+      - TRANSCRIBER_IMAGE=kpa90/podcast-transcriber:latest
+      # Absolutna ścieżka do katalogu data/ NA HOŚCIE (nie w kontenerze!)
+      # Zmień na właściwą ścieżkę przed uruchomieniem
+      - HOST_DATA_PATH=${HOST_DATA_PATH:-/opt/podcast-transcriber/data}
+    mem_limit: 200m
+
+volumes:
+  podcast_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${HOST_DATA_PATH:-/opt/podcast-transcriber/data}

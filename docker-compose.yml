@@ -1,0 +1,57 @@
+name: podcast
+
+# Lokalnie:    IMAGE_PREFIX nie jest ustawiony → obrazy bez prefiksu
+# Docker Hub:  IMAGE_PREFIX=kacperpaluch/ → kacperpaluch/podcast-web:latest
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    image: ${IMAGE_PREFIX:-}podcast-web:${TAG:-latest}
+    container_name: podcast-web
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - podcast_data:/data
+    environment:
+      - DB_PATH=/data/app.db
+    mem_limit: 300m
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: scheduler/Dockerfile
+    image: ${IMAGE_PREFIX:-}podcast-scheduler:${TAG:-latest}
+    container_name: podcast-scheduler
+    restart: unless-stopped
+    volumes:
+      - podcast_data:/data
+    environment:
+      - DB_PATH=/data/app.db
+    mem_limit: 200m
+
+  worker-controller:
+    build:
+      context: .
+      dockerfile: worker_controller/Dockerfile
+    image: ${IMAGE_PREFIX:-}podcast-worker-controller:${TAG:-latest}
+    container_name: podcast-worker-controller
+    restart: unless-stopped
+    volumes:
+      - podcast_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DB_PATH=/data/app.db
+      - TRANSCRIBER_IMAGE=${IMAGE_PREFIX:-}podcast-transcriber:${TAG:-latest}
+      - HOST_DATA_PATH=${PWD}/data
+    mem_limit: 200m
+
+volumes:
+  podcast_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/data
