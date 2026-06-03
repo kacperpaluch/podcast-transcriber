@@ -121,6 +121,7 @@ def run_parakeet(audio_path: str, episode_id: int) -> bool:
         "-models", "/models",
         "-workers", "1",
         "-ffmpeg-timeout", "10m",
+        "-log-level", "debug",
     ]
     log.info("Starting Parakeet: %s", " ".join(cmd))
     try:
@@ -177,13 +178,16 @@ def run_parakeet(audio_path: str, episode_id: int) -> bool:
     except Exception as e:
         log.error("Parakeet error: %s", e)
         try:
+            exit_code = subprocess.run(
+                ["docker", "inspect", "--format={{.State.ExitCode}}", PARAKEET_CONTAINER],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
             logs = subprocess.run(
-                ["docker", "logs", "--tail", "30", PARAKEET_CONTAINER],
+                ["docker", "logs", "--tail", "50", PARAKEET_CONTAINER],
                 capture_output=True, text=True, timeout=5,
             )
             output = (logs.stdout + logs.stderr).strip()
-            if output:
-                log.error("Parakeet container logs:\n%s", output)
+            log.error("Parakeet exit code: %s\nContainer logs:\n%s", exit_code, output)
         except Exception:
             pass
         return False
