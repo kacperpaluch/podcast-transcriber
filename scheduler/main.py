@@ -73,10 +73,10 @@ def process_feed(feed):
                 continue
 
             conn.execute(
-                """INSERT INTO episodes(feed_id, guid, rss_title, audio_url, published_at)
-                   VALUES(?, ?, ?, ?, ?)""",
+                """INSERT INTO episodes(feed_id, guid, rss_title, audio_url, published_at, duration_seconds)
+                   VALUES(?, ?, ?, ?, ?, ?)""",
                 (feed["id"], guid, getattr(entry, "title", None),
-                 audio_url, _parse_date(entry)),
+                 audio_url, _parse_date(entry), _parse_duration(entry)),
             )
             new_count += 1
             log.info("Queued new episode: %s", getattr(entry, "title", guid[:16]))
@@ -105,10 +105,10 @@ def _establish_baseline(feed, parsed):
             if existing:
                 continue
             conn.execute(
-                """INSERT INTO episodes(feed_id, guid, rss_title, audio_url, published_at, status)
-                   VALUES(?, ?, ?, ?, ?, 'skipped')""",
+                """INSERT INTO episodes(feed_id, guid, rss_title, audio_url, published_at, duration_seconds, status)
+                   VALUES(?, ?, ?, ?, ?, ?, 'skipped')""",
                 (feed["id"], guid, getattr(entry, "title", None),
-                 audio_url, _parse_date(entry)),
+                 audio_url, _parse_date(entry), _parse_duration(entry)),
             )
             count += 1
 
@@ -153,6 +153,21 @@ def _parse_date(entry):
         except Exception:
             return published
     return None
+
+
+def _parse_duration(entry):
+    raw = str(entry.get("itunes_duration") or "").strip()
+    if not raw:
+        return None
+    try:
+        if ":" in raw:
+            sec = 0
+            for part in raw.split(":"):
+                sec = sec * 60 + int(part)
+            return sec
+        return int(float(raw))
+    except Exception:
+        return None
 
 
 def main():

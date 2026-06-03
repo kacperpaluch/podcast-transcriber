@@ -50,10 +50,18 @@ http://<adres-pi>:8080
 
 Przez interfejs webowy:
 
-1. **Kanały RSS** → dodaj kanały (własna nazwa + URL RSS)
-2. **Ustawienia** → interwał sprawdzania, model Whisper, URL webhooka n8n
+1. **Kanały RSS** → dodaj kanały (własna nazwa + URL RSS + język). Przy każdym kanale:
+   - **Pobierz ostatni** — dodaje najnowszy odcinek z RSS do kolejki
+   - **Archiwum** — przegląda wszystkie odcinki z RSS i pozwala wymusić transkrypcję dowolnego
+     (np. archiwalnego). Dodane odcinki trafiają do kolejki i są przetwarzane pojedynczo, po kolei.
+2. **Ustawienia** → interwał sprawdzania, model transkrypcji, URL webhooka n8n
 3. **Odcinki** → kolejka, statusy, podgląd transkrypcji
-4. **Historia webhooków** → log wysłanych webhooków z możliwością ponownego wysłania
+4. **Panel główny** → statystyki, aktywna transkrypcja z paskiem postępu oraz lista wszystkich
+   odcinków (sortowana od najnowszych, stronicowana po 30)
+5. **Historia webhooków** → log wysłanych webhooków z możliwością ponownego wysłania
+
+> Czas trwania odcinka jest odczytywany z pola `itunes:duration` w RSS już przy dodaniu do kolejki,
+> więc widać go na liście jeszcze przed transkrypcją.
 
 ### Modele Whisper
 

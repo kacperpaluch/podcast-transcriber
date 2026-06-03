@@ -40,6 +40,10 @@ class SettingsUpdate(BaseModel):
     webhook_url: Optional[str] = None
 
 
+class QueueEpisode(BaseModel):
+    guid: str
+
+
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -156,7 +160,8 @@ def update_settings(update: SettingsUpdate):
 # ── Episodes API ──────────────────────────────────────────────────────────────
 
 @app.get("/api/episodes")
-def list_episodes(feed_id: Optional[int] = None, status: Optional[str] = None, limit: int = 50):
+def list_episodes(feed_id: Optional[int] = None, status: Optional[str] = None,
+                  limit: int = 50, offset: int = 0):
     query = """
         SELECT e.id, e.feed_id, f.display_name as feed_name, e.rss_title,
                e.status, e.language, e.duration_seconds, e.error,
@@ -172,8 +177,8 @@ def list_episodes(feed_id: Optional[int] = None, status: Optional[str] = None, l
     if status is not None:
         query += " AND e.status=?"
         params.append(status)
-    query += " ORDER BY e.created_at DESC LIMIT ?"
-    params.append(limit)
+    query += " ORDER BY COALESCE(e.published_at, e.created_at) DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
     with db.db() as conn:
         rows = conn.execute(query, params).fetchall()
     return [dict(r) for r in rows]
@@ -380,6 +385,124 @@ def _parse_date(entry):
     return None
 
 
+def _parse_duration(entry):
+    """Parsuje itunes:duration z RSS (sekundy, MM:SS lub HH:MM:SS) na sekundy."""
+    raw = str(entry.get("itunes_duration") or "").strip()
+    if not raw:
+        return None
+    try:
+        if ":" in raw:
+            sec = 0
+            for part in raw.split(":"):
+                sec = sec * 60 + int(part)
+            return sec
+        return int(float(raw))
+    except Exception:
+        return None
+
+
+@app.get("/api/feeds/{feed_id}/rss-episodes")
+def list_rss_episodes(feed_id: int):
+    """Lista wszystkich odcinków z RSS feedu (do ręcznego kolejkowania archiwalnych)."""
+    with db.db() as conn:
+        feed = conn.execute("SELECT id, url FROM feeds WHERE id=?", (feed_id,)).fetchone()
+    if not feed:
+        raise HTTPException(404, "Feed not found")
+
+    try:
+        parsed = feedparser.parse(feed["url"])
+    except Exception as e:
+        raise HTTPException(502, f"Nie można pobrać RSS: {e}")
+    if parsed.bozo and not parsed.entries:
+        raise HTTPException(502, f"Błąd parsowania RSS: {parsed.bozo_exception}")
+
+    items = []
+    for entry in parsed.entries:
+        audio_url = _find_audio_url(entry)
+        if not audio_url:
+            continue
+        guid = getattr(entry, "id", None) or getattr(entry, "link", None)
+        if not guid:
+            raw = f"{entry.get('title','')}{entry.get('published','')}"
+            guid = hashlib.sha1(raw.encode()).hexdigest()
+        items.append({
+            "guid": guid,
+            "title": getattr(entry, "title", None),
+            "published_at": _parse_date(entry),
+            "duration_seconds": _parse_duration(entry),
+        })
+
+    guids = [i["guid"] for i in items]
+    statuses = {}
+    if guids:
+        placeholders = ",".join("?" * len(guids))
+        with db.db() as conn:
+            rows = conn.execute(
+                f"SELECT guid, status FROM episodes WHERE guid IN ({placeholders})", guids
+            ).fetchall()
+        statuses = {r["guid"]: r["status"] for r in rows}
+    for i in items:
+        i["status"] = statuses.get(i["guid"])
+    return items
+
+
+@app.post("/api/feeds/{feed_id}/queue-episode")
+def queue_episode(feed_id: int, body: QueueEpisode):
+    """Kolejkuje konkretny (np. archiwalny) odcinek z RSS po jego guid."""
+    with db.db() as conn:
+        feed = conn.execute("SELECT id, url FROM feeds WHERE id=?", (feed_id,)).fetchone()
+    if not feed:
+        raise HTTPException(404, "Feed not found")
+
+    try:
+        parsed = feedparser.parse(feed["url"])
+    except Exception as e:
+        raise HTTPException(502, f"Nie można pobrać RSS: {e}")
+
+    target = None
+    for entry in parsed.entries:
+        guid = getattr(entry, "id", None) or getattr(entry, "link", None)
+        if not guid:
+            raw = f"{entry.get('title','')}{entry.get('published','')}"
+            guid = hashlib.sha1(raw.encode()).hexdigest()
+        if guid == body.guid:
+            target = entry
+            break
+    if target is None:
+        raise HTTPException(404, "Nie znaleziono odcinka o tym guid w RSS")
+
+    audio_url = _find_audio_url(target)
+    if not audio_url:
+        raise HTTPException(404, "Odcinek nie ma pliku audio")
+
+    rss_title = getattr(target, "title", None)
+    published_at = _parse_date(target)
+    duration = _parse_duration(target)
+
+    with db.db() as conn:
+        existing = conn.execute(
+            "SELECT id, status FROM episodes WHERE guid=?", (body.guid,)
+        ).fetchone()
+        if existing:
+            if existing["status"] in ("queued", "transcribing"):
+                return {"queued": False, "episode_id": existing["id"],
+                        "message": f"Odcinek już jest w kolejce (status: {existing['status']})"}
+            conn.execute(
+                """UPDATE episodes SET status='queued', error=NULL, transcript=NULL,
+                          audio_url=?, duration_seconds=? WHERE id=?""",
+                (audio_url, duration, existing["id"]),
+            )
+            return {"queued": True, "episode_id": existing["id"],
+                    "message": f"Odcinek ponownie dodany do kolejki (był: {existing['status']})"}
+        conn.execute(
+            """INSERT INTO episodes(feed_id, guid, rss_title, audio_url, published_at, duration_seconds)
+               VALUES(?, ?, ?, ?, ?, ?)""",
+            (feed_id, body.guid, rss_title, audio_url, published_at, duration),
+        )
+        ep = conn.execute("SELECT id FROM episodes WHERE guid=?", (body.guid,)).fetchone()
+    return {"queued": True, "episode_id": ep["id"], "message": "Odcinek dodany do kolejki"}
+
+
 @app.post("/api/feeds/{feed_id}/fetch-latest")
 def fetch_latest_episode(feed_id: int):
     with db.db() as conn:
@@ -417,6 +540,7 @@ def fetch_latest_episode(feed_id: int):
 
     rss_title = getattr(entry, "title", None)
     published_at = _parse_date(entry)
+    duration = _parse_duration(entry)
     rss_feed_title = getattr(parsed.feed, "title", None)
 
     # Aktualizuj rss_feed_title w feedzie
@@ -442,8 +566,8 @@ def fetch_latest_episode(feed_id: int):
         # Już przetworzony lub błąd — reset do queued żeby przetestować ponownie
         with db.db() as conn:
             conn.execute(
-                "UPDATE episodes SET status='queued', error=NULL, transcript=NULL, audio_url=? WHERE id=?",
-                (audio_url, ep_id),
+                "UPDATE episodes SET status='queued', error=NULL, transcript=NULL, audio_url=?, duration_seconds=? WHERE id=?",
+                (audio_url, duration, ep_id),
             )
         return {
             "queued": True,
@@ -454,9 +578,9 @@ def fetch_latest_episode(feed_id: int):
     else:
         with db.db() as conn:
             conn.execute(
-                """INSERT INTO episodes(feed_id, guid, rss_title, audio_url, published_at)
-                   VALUES(?, ?, ?, ?, ?)""",
-                (feed_id, guid, rss_title, audio_url, published_at),
+                """INSERT INTO episodes(feed_id, guid, rss_title, audio_url, published_at, duration_seconds)
+                   VALUES(?, ?, ?, ?, ?, ?)""",
+                (feed_id, guid, rss_title, audio_url, published_at, duration),
             )
             ep = conn.execute(
                 "SELECT id FROM episodes WHERE guid=?", (guid,)
