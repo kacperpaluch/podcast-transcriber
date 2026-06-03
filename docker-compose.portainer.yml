@@ -1,9 +1,12 @@
-# Docker Compose dla Portainer / wdrożenie bez budowania lokalnego
-# Używa gotowych obrazów z Docker Hub: kpa90/podcast-*
+# ============================================================
+#  Podcast Transcriber — Docker Compose dla Portainer
+#  Obrazy pobierane automatycznie z Docker Hub (kpa90/podcast-*)
+#  Nie wymaga budowania lokalnego.
 #
-# PRZED URUCHOMIENIEM ustaw zmienną HOST_DATA_PATH na absolutną ścieżkę
-# do katalogu danych na hoście, np.: /home/pi/podcast-data
-# W Portainerze: Stacks → Add stack → wklej ten plik → ustaw zmienne środowiskowe
+#  JEDYNA zmienna do ustawienia: HOST_DATA_PATH
+#  Ustaw ją w Portainer → Stacks → (twój stack) → Environment variables
+#  Przykład: HOST_DATA_PATH = /opt/podcast-transcriber/data
+# ============================================================
 
 name: podcast
 
@@ -40,15 +43,8 @@ services:
     environment:
       - DB_PATH=/data/app.db
       - TRANSCRIBER_IMAGE=kpa90/podcast-transcriber:latest
-      # Absolutna ścieżka do katalogu data/ NA HOŚCIE (nie w kontenerze!)
-      # Zmień na właściwą ścieżkę przed uruchomieniem
-      - HOST_DATA_PATH=${HOST_DATA_PATH:-/opt/podcast-transcriber/data}
+      - HOST_DATA_PATH=${HOST_DATA_PATH}
     mem_limit: 200m
 
 volumes:
   podcast_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${HOST_DATA_PATH:-/opt/podcast-transcriber/data}
