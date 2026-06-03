@@ -137,12 +137,15 @@ def _split_audio(path: str, chunk_secs: int) -> list:
     return chunks if chunks else [path]
 
 
-def run_parakeet(audio_path: str, episode_id: int, language: str | None = None) -> bool:
+def _stop_parakeet() -> None:
     try:
-        subprocess.run(["docker", "rm", "-f", PARAKEET_CONTAINER], capture_output=True, timeout=10)
+        subprocess.run(["docker", "rm", "-f", PARAKEET_CONTAINER], capture_output=True, timeout=15)
     except Exception:
         pass
 
+
+def _start_parakeet() -> bool:
+    _stop_parakeet()
     cmd = [
         "docker", "run", "-d",
         "--name", PARAKEET_CONTAINER,
@@ -165,55 +168,80 @@ def run_parakeet(audio_path: str, episode_id: int, language: str | None = None) 
         log.error("Failed to start Parakeet container: %s", e)
         return False
 
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        try:
+            r = httpx.get("http://localhost:5092/health", timeout=2)
+            if r.status_code == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    log.error("Parakeet did not become ready in time")
+    return False
+
+
+def _log_parakeet_crash() -> None:
     try:
-        log.info("Waiting for Parakeet to be ready...")
-        deadline = time.time() + 120
-        ready = False
-        while time.time() < deadline:
-            try:
-                r = httpx.get("http://localhost:5092/health", timeout=2)
-                if r.status_code == 200:
-                    ready = True
-                    break
-            except Exception:
-                pass
-            time.sleep(2)
+        exit_code = subprocess.run(
+            ["docker", "inspect", "--format={{.State.ExitCode}}", PARAKEET_CONTAINER],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        logs = subprocess.run(
+            ["docker", "logs", "--tail", "50", PARAKEET_CONTAINER],
+            capture_output=True, text=True, timeout=5,
+        )
+        output = (logs.stdout + logs.stderr).strip()
+        log.error("Parakeet exit code: %s\nContainer logs:\n%s", exit_code, output)
+    except Exception:
+        pass
 
-        if not ready:
-            log.error("Parakeet did not become ready in time")
-            return False
 
-        duration = _audio_duration(audio_path)
-        if duration > 0:
-            with db.db() as conn:
-                conn.execute(
-                    "UPDATE episodes SET duration_seconds=?, transcribed_seconds=0 WHERE id=?",
-                    (int(duration), episode_id),
-                )
-        if duration > PARAKEET_CHUNK_SECS:
-            log.info("Audio %.0fs > %ds, splitting into chunks", duration, PARAKEET_CHUNK_SECS)
-            chunks = _split_audio(audio_path, PARAKEET_CHUNK_SECS)
-            log.info("Split into %d chunks", len(chunks))
-        else:
-            chunks = [audio_path]
+def run_parakeet(audio_path: str, episode_id: int, language: str | None = None) -> bool:
+    duration = _audio_duration(audio_path)
+    if duration > 0:
+        with db.db() as conn:
+            conn.execute(
+                "UPDATE episodes SET duration_seconds=?, transcribed_seconds=0 WHERE id=?",
+                (int(duration), episode_id),
+            )
+    if duration > PARAKEET_CHUNK_SECS:
+        log.info("Audio %.0fs > %ds, splitting into chunks", duration, PARAKEET_CHUNK_SECS)
+        chunks = _split_audio(audio_path, PARAKEET_CHUNK_SECS)
+        log.info("Split into %d chunks", len(chunks))
+    else:
+        chunks = [audio_path]
 
+    try:
         parts = []
         for i, chunk in enumerate(chunks):
             log.info("Transcribing chunk %d/%d", i + 1, len(chunks))
+            # Restart Parakeet per chunk: the ONNX Runtime memory arenas grow
+            # across requests and OOM the container after a few chunks. A fresh
+            # container resets memory; model load is fast (~0.1s).
+            if not _start_parakeet():
+                return False
+
             form = {"response_format": "json"}
             if language:
                 form["language"] = language
             is_wav = chunk.endswith(".wav")
             fname = "audio.wav" if is_wav else "audio.m4a"
             ctype = "audio/wav" if is_wav else "audio/mp4"
-            with open(chunk, "rb") as f:
-                resp = httpx.post(
-                    "http://localhost:5092/v1/audio/transcriptions",
-                    files={"file": (fname, f, ctype)},
-                    data=form,
-                    timeout=7200,
-                )
-            resp.raise_for_status()
+            try:
+                with open(chunk, "rb") as f:
+                    resp = httpx.post(
+                        "http://localhost:5092/v1/audio/transcriptions",
+                        files={"file": (fname, f, ctype)},
+                        data=form,
+                        timeout=7200,
+                    )
+                resp.raise_for_status()
+            except Exception as e:
+                log.error("Parakeet error on chunk %d/%d: %s", i + 1, len(chunks), e)
+                _log_parakeet_crash()
+                return False
+
             parts.append(resp.json().get("text", ""))
             if chunk != audio_path:
                 try:
@@ -241,28 +269,8 @@ def run_parakeet(audio_path: str, episode_id: int, language: str | None = None) 
 
         log.info("Parakeet done for episode %d (%d chars)", episode_id, len(transcript))
         return True
-
-    except Exception as e:
-        log.error("Parakeet error: %s", e)
-        try:
-            exit_code = subprocess.run(
-                ["docker", "inspect", "--format={{.State.ExitCode}}", PARAKEET_CONTAINER],
-                capture_output=True, text=True, timeout=5,
-            ).stdout.strip()
-            logs = subprocess.run(
-                ["docker", "logs", "--tail", "50", PARAKEET_CONTAINER],
-                capture_output=True, text=True, timeout=5,
-            )
-            output = (logs.stdout + logs.stderr).strip()
-            log.error("Parakeet exit code: %s\nContainer logs:\n%s", exit_code, output)
-        except Exception:
-            pass
-        return False
     finally:
-        try:
-            subprocess.run(["docker", "rm", "-f", PARAKEET_CONTAINER], capture_output=True, timeout=10)
-        except Exception:
-            pass
+        _stop_parakeet()
 
 
 def send_webhook(episode_id: int) -> bool:
