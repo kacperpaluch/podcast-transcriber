@@ -74,9 +74,9 @@ przez worker-controller i zamykany po zakończeniu, więc nie zajmuje pamięci m
 Uwagi dot. Raspberry Pi:
 
 - Eksport ONNX używa pełnej (kwadratowej w długości) atencji, dlatego długie audio jest dzielone na
-  fragmenty 5-minutowe (`PARAKEET_CHUNK_SECS`) i transkrybowane po kawałku — bez tego dochodzi do OOM.
-- Kontenerowi przydzielane jest do 5 GB RAM. Na RPi z 8 GB warto upewnić się, że nic innego nie zjada
-  pamięci w trakcie transkrypcji.
+  fragmenty 2-minutowe (`PARAKEET_CHUNK_SECS`) i transkrybowane po kawałku — bez tego dochodzi do OOM.
+- Kontener dostaje limit 4 GB RAM z **wyłączonym swapem** (`--memory-swap=4g`). Dzięki temu przy
+  przekroczeniu limitu Docker ubija sam kontener, zamiast wpędzać cały Pi w swap i zawieszać host.
 - Każdy kanał ma w UI ustawienie **języka** — Parakeet potrzebuje go jawnie (domyślnie zgadywałby `en`).
 
 ## Webhook do n8n
