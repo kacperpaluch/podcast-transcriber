@@ -25,6 +25,7 @@ TRANSCRIBER_CONTAINER = "podcast-transcriber-active"
 PARAKEET_IMAGE = os.environ.get("PARAKEET_IMAGE", "ghcr.io/achetronic/parakeet:latest")
 PARAKEET_CONTAINER = "podcast-parakeet-active"
 COMPOSE_NETWORK = os.environ.get("COMPOSE_NETWORK", "podcast_default")
+PARAKEET_CHUNK_SECS = 600  # 10 minutes — keeps mel frames within memory budget
 
 POLL_INTERVAL = 10          # seconds between queue checks
 WEBHOOK_RETRIES = 5
@@ -106,6 +107,35 @@ def run_transcriber(audio_path: str, model: str) -> bool:
         return False
 
 
+def _audio_duration(path: str) -> float:
+    try:
+        import json as _json
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path],
+            capture_output=True, text=True, timeout=30,
+        )
+        return float(_json.loads(r.stdout)["format"]["duration"])
+    except Exception:
+        return 0.0
+
+
+def _split_audio(path: str, chunk_secs: int) -> list:
+    base = path.rsplit(".", 1)[0]
+    pattern = f"{base}_part_%03d.audio"
+    r = subprocess.run([
+        "ffmpeg", "-y", "-i", path,
+        "-f", "segment", "-segment_time", str(chunk_secs),
+        "-c", "copy", "-reset_timestamps", "1",
+        pattern,
+    ], capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        log.warning("ffmpeg split failed, using full file: %s", r.stderr[:200])
+        return [path]
+    import glob
+    chunks = sorted(glob.glob(f"{base}_part_*.audio"))
+    return chunks if chunks else [path]
+
+
 def run_parakeet(audio_path: str, episode_id: int) -> bool:
     try:
         subprocess.run(["docker", "rm", "-f", PARAKEET_CONTAINER], capture_output=True, timeout=10)
@@ -151,17 +181,33 @@ def run_parakeet(audio_path: str, episode_id: int) -> bool:
             log.error("Parakeet did not become ready in time")
             return False
 
-        log.info("Parakeet ready, sending audio for episode %d", episode_id)
-        with open(audio_path, "rb") as f:
-            resp = httpx.post(
-                "http://localhost:5092/v1/audio/transcriptions",
-                files={"file": ("audio.m4a", f, "audio/mp4")},
-                data={"response_format": "json"},
-                timeout=7200,
-            )
-        resp.raise_for_status()
-        transcript = resp.json().get("text", "")
+        duration = _audio_duration(audio_path)
+        if duration > PARAKEET_CHUNK_SECS:
+            log.info("Audio %.0fs > %ds, splitting into chunks", duration, PARAKEET_CHUNK_SECS)
+            chunks = _split_audio(audio_path, PARAKEET_CHUNK_SECS)
+            log.info("Split into %d chunks", len(chunks))
+        else:
+            chunks = [audio_path]
 
+        parts = []
+        for i, chunk in enumerate(chunks):
+            log.info("Transcribing chunk %d/%d", i + 1, len(chunks))
+            with open(chunk, "rb") as f:
+                resp = httpx.post(
+                    "http://localhost:5092/v1/audio/transcriptions",
+                    files={"file": ("audio.m4a", f, "audio/mp4")},
+                    data={"response_format": "json"},
+                    timeout=7200,
+                )
+            resp.raise_for_status()
+            parts.append(resp.json().get("text", ""))
+            if chunk != audio_path:
+                try:
+                    os.remove(chunk)
+                except Exception:
+                    pass
+
+        transcript = "\n".join(parts).strip()
         if not transcript:
             log.error("Empty transcript from Parakeet")
             return False

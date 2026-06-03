@@ -6,6 +6,8 @@ WORKDIR /app
 
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir httpx==0.27.0
 
 COPY shared /app/shared
