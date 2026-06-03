@@ -50,7 +50,9 @@ def transcribe_with_progress(audio_path: str, model_name: str, compute_type: str
     os.makedirs(models_dir, exist_ok=True)
 
     log.info("Loading model %s (%s)...", model_name, compute_type)
-    model = WhisperModel(model_name, device="cpu", compute_type=compute_type, download_root=models_dir)
+    cpu_threads = int(os.environ.get("CPU_THREADS", "4"))
+    model = WhisperModel(model_name, device="cpu", compute_type=compute_type,
+                         download_root=models_dir, cpu_threads=cpu_threads)
 
     log.info("Starting transcription of %s", audio_path)
     segments, info = model.transcribe(
@@ -58,7 +60,7 @@ def transcribe_with_progress(audio_path: str, model_name: str, compute_type: str
         language=language,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
-        beam_size=5,
+        beam_size=1,
     )
 
     log.info("Detected language: %s (prob=%.2f)", info.language, info.language_probability)
