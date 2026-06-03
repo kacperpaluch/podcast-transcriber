@@ -116,7 +116,7 @@ def run_parakeet(audio_path: str, episode_id: int) -> bool:
         "docker", "run", "-d",
         "--name", PARAKEET_CONTAINER,
         "--memory=3g",
-        "--network", COMPOSE_NETWORK,
+        "--network", "container:podcast-worker-controller",
         PARAKEET_IMAGE,
         "-models", "/models",
         "-workers", "1",
@@ -137,7 +137,7 @@ def run_parakeet(audio_path: str, episode_id: int) -> bool:
         ready = False
         while time.time() < deadline:
             try:
-                r = httpx.get(f"http://{PARAKEET_CONTAINER}:5092/health", timeout=2)
+                r = httpx.get("http://localhost:5092/health", timeout=2)
                 if r.status_code == 200:
                     ready = True
                     break
@@ -152,7 +152,7 @@ def run_parakeet(audio_path: str, episode_id: int) -> bool:
         log.info("Parakeet ready, sending audio for episode %d", episode_id)
         with open(audio_path, "rb") as f:
             resp = httpx.post(
-                f"http://{PARAKEET_CONTAINER}:5092/v1/audio/transcriptions",
+                "http://localhost:5092/v1/audio/transcriptions",
                 files={"file": ("audio.m4a", f, "audio/mp4")},
                 data={"response_format": "json"},
                 timeout=7200,
