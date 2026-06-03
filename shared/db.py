@@ -78,3 +78,7 @@ def init_db():
             INSERT OR IGNORE INTO settings(key, value) VALUES ('whisper_model', 'large-v3-turbo');
             INSERT OR IGNORE INTO settings(key, value) VALUES ('webhook_url', '');
         """)
+        # Migration: add language column to feeds if missing
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(feeds)").fetchall()]
+        if "language" not in cols:
+            conn.execute("ALTER TABLE feeds ADD COLUMN language TEXT")

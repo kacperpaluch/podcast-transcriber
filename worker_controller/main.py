@@ -136,7 +136,7 @@ def _split_audio(path: str, chunk_secs: int) -> list:
     return chunks if chunks else [path]
 
 
-def run_parakeet(audio_path: str, episode_id: int) -> bool:
+def run_parakeet(audio_path: str, episode_id: int, language: str | None = None) -> bool:
     try:
         subprocess.run(["docker", "rm", "-f", PARAKEET_CONTAINER], capture_output=True, timeout=10)
     except Exception:
@@ -192,11 +192,14 @@ def run_parakeet(audio_path: str, episode_id: int) -> bool:
         parts = []
         for i, chunk in enumerate(chunks):
             log.info("Transcribing chunk %d/%d", i + 1, len(chunks))
+            form = {"response_format": "json"}
+            if language:
+                form["language"] = language
             with open(chunk, "rb") as f:
                 resp = httpx.post(
                     "http://localhost:5092/v1/audio/transcriptions",
                     files={"file": ("audio.m4a", f, "audio/mp4")},
-                    data={"response_format": "json"},
+                    data=form,
                     timeout=7200,
                 )
             resp.raise_for_status()
@@ -315,6 +318,9 @@ def process_episode(episode):
     episode_id = episode["id"]
     audio_url = episode["audio_url"]
     model = get_setting("whisper_model", "large-v3-turbo")
+    with db.db() as conn:
+        feed_row = conn.execute("SELECT language FROM feeds WHERE id=?", (episode["feed_id"],)).fetchone()
+    feed_language = feed_row["language"] if feed_row else None
 
     log.info("Processing episode %d: %s", episode_id, episode["rss_title"] or guid_short(episode["guid"]))
 
@@ -338,7 +344,7 @@ def process_episode(episode):
 
         # Run transcriber (blocks until done)
         if "parakeet" in model.lower():
-            success = run_parakeet(audio_path, episode_id)
+            success = run_parakeet(audio_path, episode_id, language=feed_language)
         else:
             success = run_transcriber(audio_path, model)
 

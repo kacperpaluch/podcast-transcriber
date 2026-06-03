@@ -25,11 +25,13 @@ db.init_db()
 class FeedCreate(BaseModel):
     display_name: str
     url: str
+    language: Optional[str] = None
 
 
 class FeedUpdate(BaseModel):
     display_name: Optional[str] = None
     enabled: Optional[bool] = None
+    language: Optional[str] = None
 
 
 class SettingsUpdate(BaseModel):
@@ -51,7 +53,7 @@ async def index(request: Request):
 def list_feeds():
     with db.db() as conn:
         rows = conn.execute(
-            "SELECT id, display_name, url, enabled, rss_feed_title, created_at FROM feeds ORDER BY id"
+            "SELECT id, display_name, url, enabled, rss_feed_title, language, created_at FROM feeds ORDER BY id"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -65,11 +67,11 @@ def add_feed(feed: FeedCreate):
     try:
         with db.db() as conn:
             conn.execute(
-                "INSERT INTO feeds(display_name, url) VALUES(?, ?)",
-                (feed.display_name.strip(), feed.url.strip()),
+                "INSERT INTO feeds(display_name, url, language) VALUES(?, ?, ?)",
+                (feed.display_name.strip(), feed.url.strip(), feed.language or None),
             )
             row = conn.execute(
-                "SELECT id, display_name, url, enabled, rss_feed_title FROM feeds WHERE url=?",
+                "SELECT id, display_name, url, enabled, rss_feed_title, language FROM feeds WHERE url=?",
                 (feed.url.strip(),),
             ).fetchone()
         return dict(row)
@@ -95,8 +97,13 @@ def update_feed(feed_id: int, update: FeedUpdate):
                 "UPDATE feeds SET enabled=? WHERE id=?",
                 (1 if update.enabled else 0, feed_id),
             )
+        if update.language is not None:
+            conn.execute(
+                "UPDATE feeds SET language=? WHERE id=?",
+                (update.language or None, feed_id),
+            )
         row = conn.execute(
-            "SELECT id, display_name, url, enabled, rss_feed_title FROM feeds WHERE id=?",
+            "SELECT id, display_name, url, enabled, rss_feed_title, language FROM feeds WHERE id=?",
             (feed_id,),
         ).fetchone()
     return dict(row)

@@ -132,6 +132,18 @@
             <label>URL RSS</label>
             <input id="feed-url" type="url" placeholder="https://...">
           </div>
+          <div class="form-group" style="min-width:120px;max-width:160px">
+            <label>Język</label>
+            <select id="feed-language">
+              <option value="">auto</option>
+              <option value="pl">pl – polski</option>
+              <option value="en">en – angielski</option>
+              <option value="de">de – niemiecki</option>
+              <option value="fr">fr – francuski</option>
+              <option value="uk">uk – ukraiński</option>
+              <option value="ru">ru – rosyjski</option>
+            </select>
+          </div>
           <div style="display:flex;align-items:flex-end">
             <button class="btn-primary" onclick="addFeed()">Dodaj</button>
           </div>
@@ -341,13 +353,16 @@ async function loadFeeds() {
     $('feeds-table').innerHTML = `
       <table>
         <thead><tr>
-          <th>Nazwa</th><th>URL RSS</th><th>Tytuł z RSS</th><th>Aktywny</th><th>Akcje</th>
+          <th>Nazwa</th><th>URL RSS</th><th>Tytuł z RSS</th><th>Język</th><th>Aktywny</th><th>Akcje</th>
         </tr></thead>
         <tbody>${feeds.map(f => `
           <tr>
             <td><strong>${esc(f.display_name)}</strong></td>
             <td style="font-size:12px;color:#64748b;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.url)}</td>
             <td style="font-size:12px;color:#94a3b8">${esc(f.rss_feed_title || '–')}</td>
+            <td><select style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:2px 6px;font-size:12px" onchange="api('PATCH','/api/feeds/${f.id}',{language:this.value||null}).catch(e=>alert(e.message))">
+              ${['','pl','en','de','fr','uk','ru'].map(l=>`<option value="${l}" ${(f.language||'')==l?'selected':''}>${l||'auto'}</option>`).join('')}
+            </select></td>
             <td><label class="toggle"><input type="checkbox" ${f.enabled?'checked':''} onchange="toggleFeed(${f.id}, this.checked)"><span class="slider"></span></label></td>
             <td style="display:flex;gap:6px;flex-wrap:wrap">
               <button class="btn-ghost btn-sm" onclick="fetchLatest(${f.id}, this)" title="Pobierz ostatni odcinek z RSS i dodaj do kolejki">Pobierz ostatni</button>
@@ -366,7 +381,8 @@ async function addFeed() {
   const url = $('feed-url').value.trim();
   $('feed-alert').innerHTML = '';
   try {
-    await api('POST', '/api/feeds', { display_name: name, url });
+    const language = $('feed-language').value || null;
+    await api('POST', '/api/feeds', { display_name: name, url, language });
     $('feed-name').value = '';
     $('feed-url').value = '';
     $('feed-alert').innerHTML = '<div class="alert alert-success">Kanał dodany</div>';
