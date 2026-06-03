@@ -185,10 +185,15 @@
           <div class="form-group">
             <label>Model transkrypcji</label>
             <select id="s-model">
-              <option value="large-v3-turbo">large-v3-turbo (zalecany)</option>
-              <option value="large-v3">large-v3</option>
-              <option value="medium">medium</option>
-              <option value="small">small</option>
+              <optgroup label="Whisper (OpenAI)">
+                <option value="large-v3-turbo">large-v3-turbo (zalecany)</option>
+                <option value="large-v3">large-v3</option>
+                <option value="medium">medium</option>
+                <option value="small">small</option>
+              </optgroup>
+              <optgroup label="Parakeet (NVIDIA)">
+                <option value="parakeet-tdt-0.6b-v3">parakeet-tdt-0.6b-v3 (szybszy)</option>
+              </optgroup>
             </select>
           </div>
         </div>

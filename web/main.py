@@ -122,7 +122,7 @@ def get_settings():
 
 @app.put("/api/settings")
 def update_settings(update: SettingsUpdate):
-    allowed_models = ["large-v3-turbo", "large-v3", "medium", "small"]
+    allowed_models = ["large-v3-turbo", "large-v3", "medium", "small", "parakeet-tdt-0.6b-v3"]
     with db.db() as conn:
         if update.check_interval_minutes is not None:
             if update.check_interval_minutes < 1:

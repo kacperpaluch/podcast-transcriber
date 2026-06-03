@@ -22,6 +22,9 @@ DATA_PATH = "/data"
 HOST_DATA_PATH = os.environ.get("HOST_DATA_PATH", "/data")
 TRANSCRIBER_IMAGE = os.environ.get("TRANSCRIBER_IMAGE", "podcast-transcriber:latest")
 TRANSCRIBER_CONTAINER = "podcast-transcriber-active"
+PARAKEET_IMAGE = os.environ.get("PARAKEET_IMAGE", "ghcr.io/achetronic/parakeet:latest")
+PARAKEET_CONTAINER = "podcast-parakeet-active"
+COMPOSE_NETWORK = os.environ.get("COMPOSE_NETWORK", "podcast_default")
 
 POLL_INTERVAL = 10          # seconds between queue checks
 WEBHOOK_RETRIES = 5
@@ -35,24 +38,25 @@ def get_setting(key, default=None):
 
 
 def is_transcriber_running():
-    try:
-        result = subprocess.run(
-            ["docker", "inspect", "--format={{.State.Running}}", TRANSCRIBER_CONTAINER],
-            capture_output=True, text=True, timeout=5,
-        )
-        return result.returncode == 0 and result.stdout.strip() == "true"
-    except Exception:
-        return False
+    for container in [TRANSCRIBER_CONTAINER, PARAKEET_CONTAINER]:
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "--format={{.State.Running}}", container],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip() == "true":
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def kill_zombie_transcriber():
-    try:
-        subprocess.run(
-            ["docker", "rm", "-f", TRANSCRIBER_CONTAINER],
-            capture_output=True, timeout=10,
-        )
-    except Exception:
-        pass
+    for container in [TRANSCRIBER_CONTAINER, PARAKEET_CONTAINER]:
+        try:
+            subprocess.run(["docker", "rm", "-f", container], capture_output=True, timeout=10)
+        except Exception:
+            pass
 
 
 def download_audio(audio_url: str, episode_id: int) -> str:
@@ -100,6 +104,80 @@ def run_transcriber(audio_path: str, model: str) -> bool:
     except Exception as e:
         log.error("Transcriber error: %s", e)
         return False
+
+
+def run_parakeet(audio_path: str, episode_id: int) -> bool:
+    try:
+        subprocess.run(["docker", "rm", "-f", PARAKEET_CONTAINER], capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+    cmd = [
+        "docker", "run", "-d",
+        "--name", PARAKEET_CONTAINER,
+        "--memory=3g",
+        "--network", COMPOSE_NETWORK,
+        PARAKEET_IMAGE,
+        "-models", "/models",
+        "-workers", "1",
+    ]
+    log.info("Starting Parakeet: %s", " ".join(cmd))
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+    except Exception as e:
+        log.error("Failed to start Parakeet container: %s", e)
+        return False
+
+    try:
+        log.info("Waiting for Parakeet to be ready...")
+        deadline = time.time() + 120
+        ready = False
+        while time.time() < deadline:
+            try:
+                r = httpx.get(f"http://{PARAKEET_CONTAINER}:5092/health", timeout=2)
+                if r.status_code == 200:
+                    ready = True
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
+
+        if not ready:
+            log.error("Parakeet did not become ready in time")
+            return False
+
+        log.info("Parakeet ready, sending audio for episode %d", episode_id)
+        with open(audio_path, "rb") as f:
+            resp = httpx.post(
+                f"http://{PARAKEET_CONTAINER}:5092/v1/audio/transcriptions",
+                files={"file": ("audio.m4a", f, "audio/mp4")},
+                data={"response_format": "json"},
+                timeout=7200,
+            )
+        resp.raise_for_status()
+        transcript = resp.json().get("text", "")
+
+        if not transcript:
+            log.error("Empty transcript from Parakeet")
+            return False
+
+        with db.db() as conn:
+            conn.execute(
+                "UPDATE episodes SET transcript=?, status='transcribing' WHERE id=?",
+                (transcript, episode_id),
+            )
+
+        log.info("Parakeet done for episode %d (%d chars)", episode_id, len(transcript))
+        return True
+
+    except Exception as e:
+        log.error("Parakeet error: %s", e)
+        return False
+    finally:
+        try:
+            subprocess.run(["docker", "rm", "-f", PARAKEET_CONTAINER], capture_output=True, timeout=10)
+        except Exception:
+            pass
 
 
 def send_webhook(episode_id: int) -> bool:
@@ -195,7 +273,10 @@ def process_episode(episode):
         # (duration not known yet at download time, so transcriber handles its own timeout)
 
         # Run transcriber (blocks until done)
-        success = run_transcriber(audio_path, model)
+        if "parakeet" in model.lower():
+            success = run_parakeet(audio_path, episode_id)
+        else:
+            success = run_transcriber(audio_path, model)
 
         if not success:
             raise RuntimeError("Transcriber failed")

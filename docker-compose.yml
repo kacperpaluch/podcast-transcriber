@@ -46,6 +46,8 @@ services:
       - DB_PATH=/data/app.db
       - TRANSCRIBER_IMAGE=${IMAGE_PREFIX:-}podcast-transcriber:${TAG:-latest}
       - HOST_DATA_PATH=${PWD}/data
+      - COMPOSE_NETWORK=podcast_default
+      - PARAKEET_IMAGE=ghcr.io/achetronic/parakeet:latest
     mem_limit: 200m
 
 volumes:
