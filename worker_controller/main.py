@@ -175,6 +175,16 @@ def run_parakeet(audio_path: str, episode_id: int) -> bool:
 
     except Exception as e:
         log.error("Parakeet error: %s", e)
+        try:
+            logs = subprocess.run(
+                ["docker", "logs", "--tail", "30", PARAKEET_CONTAINER],
+                capture_output=True, text=True, timeout=5,
+            )
+            output = (logs.stdout + logs.stderr).strip()
+            if output:
+                log.error("Parakeet container logs:\n%s", output)
+        except Exception:
+            pass
         return False
     finally:
         try:
