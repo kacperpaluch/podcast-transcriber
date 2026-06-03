@@ -77,7 +77,7 @@ def run_transcriber(audio_path: str, model: str) -> bool:
     cmd = [
         "docker", "run", "--rm",
         "--name", TRANSCRIBER_CONTAINER,
-        "--memory=5g",
+        "--memory=4g",
         "-e", "HF_HUB_DISABLE_XET=1",
         "-v", f"{HOST_DATA_PATH}:/data",
         TRANSCRIBER_IMAGE,
