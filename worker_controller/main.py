@@ -121,18 +121,19 @@ def _audio_duration(path: str) -> float:
 
 def _split_audio(path: str, chunk_secs: int) -> list:
     base = path.rsplit(".", 1)[0]
-    pattern = f"{base}_part_%03d.audio"
+    pattern = f"{base}_part_%03d.wav"
     r = subprocess.run([
         "ffmpeg", "-y", "-i", path,
+        "-ar", "16000", "-ac", "1",
         "-f", "segment", "-segment_time", str(chunk_secs),
-        "-c", "copy", "-reset_timestamps", "1",
+        "-reset_timestamps", "1",
         pattern,
-    ], capture_output=True, text=True, timeout=300)
+    ], capture_output=True, text=True, timeout=600)
     if r.returncode != 0:
-        log.warning("ffmpeg split failed, using full file: %s", r.stderr[:200])
+        log.warning("ffmpeg split failed (code %d): %s", r.returncode, r.stderr[-300:])
         return [path]
     import glob
-    chunks = sorted(glob.glob(f"{base}_part_*.audio"))
+    chunks = sorted(glob.glob(f"{base}_part_*.wav"))
     return chunks if chunks else [path]
 
 
@@ -195,10 +196,13 @@ def run_parakeet(audio_path: str, episode_id: int, language: str | None = None) 
             form = {"response_format": "json"}
             if language:
                 form["language"] = language
+            is_wav = chunk.endswith(".wav")
+            fname = "audio.wav" if is_wav else "audio.m4a"
+            ctype = "audio/wav" if is_wav else "audio/mp4"
             with open(chunk, "rb") as f:
                 resp = httpx.post(
                     "http://localhost:5092/v1/audio/transcriptions",
-                    files={"file": ("audio.m4a", f, "audio/mp4")},
+                    files={"file": (fname, f, ctype)},
                     data=form,
                     timeout=7200,
                 )
