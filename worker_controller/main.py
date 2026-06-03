@@ -123,7 +123,10 @@ def run_parakeet(audio_path: str, episode_id: int) -> bool:
     ]
     log.info("Starting Parakeet: %s", " ".join(cmd))
     try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            log.error("Failed to start Parakeet container (code %d): %s", result.returncode, result.stderr.strip())
+            return False
     except Exception as e:
         log.error("Failed to start Parakeet container: %s", e)
         return False
