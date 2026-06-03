@@ -64,6 +64,21 @@ Przez interfejs webowy:
 | `medium` | ★★★ | ~10–15 min | ~1,5 GB |
 | `small` | ★★ | ~5–8 min | ~1 GB |
 
+### Parakeet (eksperymentalnie)
+
+Jako alternatywę dla Whispera można wybrać `parakeet-tdt-0.6b-v3` (NVIDIA Parakeet TDT, 25 języków EU
+w tym polski). Dekoder TDT jest nieautoregresyjny, więc na CPU bywa szybszy niż Whisper. Kontener
+([`ghcr.io/achetronic/parakeet`](https://github.com/achetronic/parakeet)) uruchamiany jest on-demand
+przez worker-controller i zamykany po zakończeniu, więc nie zajmuje pamięci między transkrypcjami.
+
+Uwagi dot. Raspberry Pi:
+
+- Eksport ONNX używa pełnej (kwadratowej w długości) atencji, dlatego długie audio jest dzielone na
+  fragmenty 5-minutowe (`PARAKEET_CHUNK_SECS`) i transkrybowane po kawałku — bez tego dochodzi do OOM.
+- Kontenerowi przydzielane jest do 5 GB RAM. Na RPi z 8 GB warto upewnić się, że nic innego nie zjada
+  pamięci w trakcie transkrypcji.
+- Każdy kanał ma w UI ustawienie **języka** — Parakeet potrzebuje go jawnie (domyślnie zgadywałby `en`).
+
 ## Webhook do n8n
 
 Payload po każdej transkrypcji:

@@ -25,7 +25,7 @@ TRANSCRIBER_CONTAINER = "podcast-transcriber-active"
 PARAKEET_IMAGE = os.environ.get("PARAKEET_IMAGE", "ghcr.io/achetronic/parakeet:latest")
 PARAKEET_CONTAINER = "podcast-parakeet-active"
 COMPOSE_NETWORK = os.environ.get("COMPOSE_NETWORK", "podcast_default")
-PARAKEET_CHUNK_SECS = 600  # 10 minutes — keeps mel frames within memory budget
+PARAKEET_CHUNK_SECS = 300  # 5 minutes — Parakeet ONNX uses full attention (quadratic RAM)
 
 POLL_INTERVAL = 10          # seconds between queue checks
 WEBHOOK_RETRIES = 5
@@ -146,7 +146,7 @@ def run_parakeet(audio_path: str, episode_id: int, language: str | None = None) 
     cmd = [
         "docker", "run", "-d",
         "--name", PARAKEET_CONTAINER,
-        "--memory=4g",
+        "--memory=5g",
         "--network", "container:podcast-worker-controller",
         PARAKEET_IMAGE,
         "-models", "/models",
