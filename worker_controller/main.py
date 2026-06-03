@@ -184,6 +184,12 @@ def run_parakeet(audio_path: str, episode_id: int, language: str | None = None) 
             return False
 
         duration = _audio_duration(audio_path)
+        if duration > 0:
+            with db.db() as conn:
+                conn.execute(
+                    "UPDATE episodes SET duration_seconds=?, transcribed_seconds=0 WHERE id=?",
+                    (int(duration), episode_id),
+                )
         if duration > PARAKEET_CHUNK_SECS:
             log.info("Audio %.0fs > %ds, splitting into chunks", duration, PARAKEET_CHUNK_SECS)
             chunks = _split_audio(audio_path, PARAKEET_CHUNK_SECS)
@@ -214,6 +220,13 @@ def run_parakeet(audio_path: str, episode_id: int, language: str | None = None) 
                     os.remove(chunk)
                 except Exception:
                     pass
+            if duration > 0:
+                processed = min(int((i + 1) * PARAKEET_CHUNK_SECS), int(duration))
+                with db.db() as conn:
+                    conn.execute(
+                        "UPDATE episodes SET transcribed_seconds=? WHERE id=?",
+                        (processed, episode_id),
+                    )
 
         transcript = "\n".join(parts).strip()
         if not transcript:
