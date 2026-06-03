@@ -115,11 +115,12 @@ def run_parakeet(audio_path: str, episode_id: int) -> bool:
     cmd = [
         "docker", "run", "-d",
         "--name", PARAKEET_CONTAINER,
-        "--memory=3g",
+        "--memory=4g",
         "--network", "container:podcast-worker-controller",
         PARAKEET_IMAGE,
         "-models", "/models",
         "-workers", "1",
+        "-ffmpeg-timeout", "10m",
     ]
     log.info("Starting Parakeet: %s", " ".join(cmd))
     try:
