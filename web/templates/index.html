@@ -173,6 +173,7 @@
               <option value="transcribing">Transkrybowanie</option>
               <option value="done">Gotowe</option>
               <option value="error">Błąd</option>
+              <option value="skipped">Pominięte (archiwalne)</option>
             </select>
           </div>
           <div class="form-group" style="min-width:140px;max-width:200px">
@@ -237,17 +238,6 @@
     <div class="transcript-text" id="modal-content"></div>
     <div style="margin-top:16px;text-align:right">
       <button class="btn-ghost" onclick="document.getElementById('transcript-modal').classList.remove('open')">Zamknij</button>
-    </div>
-  </div>
-</div>
-
-<!-- ARCHIVE MODAL -->
-<div class="modal-overlay" id="archive-modal" onclick="closeArchiveModal(event)">
-  <div class="modal" style="max-width:760px">
-    <h2 id="archive-title">Archiwum</h2>
-    <div id="archive-content" style="max-height:55vh;overflow-y:auto"></div>
-    <div style="margin-top:16px;text-align:right">
-      <button class="btn-ghost" onclick="document.getElementById('archive-modal').classList.remove('open')">Zamknij</button>
     </div>
   </div>
 </div>
@@ -405,7 +395,6 @@ async function loadFeeds() {
             <td><label class="toggle"><input type="checkbox" ${f.enabled?'checked':''} onchange="toggleFeed(${f.id}, this.checked)"><span class="slider"></span></label></td>
             <td style="display:flex;gap:6px;flex-wrap:wrap">
               <button class="btn-ghost btn-sm" onclick="fetchLatest(${f.id}, this)" title="Pobierz ostatni odcinek z RSS i dodaj do kolejki">Pobierz ostatni</button>
-              <button class="btn-ghost btn-sm" onclick="openArchive(${f.id}, ${JSON.stringify(esc(f.display_name))})" title="Przeglądaj wszystkie odcinki z RSS i wymuś transkrypcję archiwalnego">Archiwum</button>
               <button class="btn-danger btn-sm" onclick="deleteFeed(${f.id})">Usuń</button>
             </td>
           </tr>`).join('')}
@@ -485,7 +474,9 @@ function buildEpisodesTable(episodes, showActions) {
         <td style="font-size:13px">${fmtDur(e.duration_seconds)}</td>
         <td style="font-size:12px;color:#64748b">${fmtDate(e.published_at || e.created_at)}</td>
         ${showActions ? `<td style="display:flex;gap:6px;flex-wrap:wrap">
-          ${e.status === 'done' ? `<button class="btn-ghost btn-sm" onclick="showTranscript(${e.id}, ${JSON.stringify(esc(e.rss_title||''))})">Transkrypcja</button>` : ''}
+          ${e.status === 'done' ? `<button class="btn-ghost btn-sm" onclick="showTranscript(${e.id})">Transkrypcja</button>` : ''}
+          ${e.status === 'done' ? `<button class="btn-ghost btn-sm" onclick="retryEpisode(${e.id})">Transkrybuj ponownie</button>` : ''}
+          ${e.status === 'skipped' ? `<button class="btn-primary btn-sm" onclick="retryEpisode(${e.id})">Transkrybuj</button>` : ''}
           ${e.status === 'error' ? `<button class="btn-primary btn-sm" onclick="retryEpisode(${e.id})">Ponów</button>` : ''}
         </td>` : ''}
       </tr>`).join('')}
@@ -493,12 +484,13 @@ function buildEpisodesTable(episodes, showActions) {
   </table>`;
 }
 
-async function showTranscript(id, title) {
-  $('modal-title').textContent = title;
+async function showTranscript(id) {
+  $('modal-title').textContent = 'Transkrypcja';
   $('modal-content').textContent = 'Ładowanie...';
   $('transcript-modal').classList.add('open');
   try {
     const data = await api('GET', `/api/episodes/${id}/transcript`);
+    $('modal-title').textContent = data.rss_title || 'Transkrypcja';
     $('modal-content').textContent = data.transcript || '(brak transkrypcji)';
   } catch(e) {
     $('modal-content').textContent = 'Błąd: ' + e.message;
@@ -634,59 +626,6 @@ async function fetchLatest(feedId, btn) {
     // Pokaż szczegóły błędu w alertcie feeds
     $('feed-alert').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
   }
-}
-
-// Archive — przeglądanie i kolejkowanie archiwalnych odcinków z RSS
-let archiveFeedId = null;
-
-async function openArchive(feedId, feedName) {
-  archiveFeedId = feedId;
-  $('archive-title').textContent = 'Archiwum — ' + feedName;
-  $('archive-content').innerHTML = '<div class="empty-state">Pobieram listę z RSS...</div>';
-  $('archive-modal').classList.add('open');
-  try {
-    const eps = await api('GET', `/api/feeds/${feedId}/rss-episodes`);
-    if (!eps.length) {
-      $('archive-content').innerHTML = '<div class="empty-state">Brak odcinków z plikiem audio w tym RSS</div>';
-      return;
-    }
-    $('archive-content').innerHTML = `<table>
-      <thead><tr><th>Tytuł</th><th>Data</th><th>Czas</th><th>Status</th><th></th></tr></thead>
-      <tbody>${eps.map(e => {
-        const inProgress = e.status === 'queued' || e.status === 'transcribing';
-        return `<tr>
-          <td style="max-width:320px"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.title||'')}">${esc(e.title||'(bez tytułu)')}</span></td>
-          <td style="font-size:12px;color:#64748b;white-space:nowrap">${fmtDate(e.published_at)}</td>
-          <td style="font-size:13px">${fmtDur(e.duration_seconds)}</td>
-          <td>${e.status ? statusBadge(e.status) : '<span style="font-size:12px;color:#475569">—</span>'}</td>
-          <td><button class="btn-primary btn-sm" ${inProgress ? 'disabled' : ''} onclick="queueArchiveEpisode(${JSON.stringify(e.guid)}, this)">${inProgress ? 'W kolejce' : 'Transkrybuj'}</button></td>
-        </tr>`;
-      }).join('')}</tbody>
-    </table>`;
-  } catch(e) {
-    $('archive-content').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
-  }
-}
-
-async function queueArchiveEpisode(guid, btn) {
-  const orig = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Dodaję...';
-  try {
-    const data = await api('POST', `/api/feeds/${archiveFeedId}/queue-episode`, { guid });
-    btn.textContent = data.queued ? '✓ Dodano' : '— Już jest';
-    btn.style.color = data.queued ? '#86efac' : '#94a3b8';
-  } catch(e) {
-    btn.textContent = 'Błąd';
-    btn.style.color = '#f87171';
-    btn.disabled = false;
-    setTimeout(() => { btn.textContent = orig; btn.style.color = ''; }, 3000);
-    alert(e.message);
-  }
-}
-
-function closeArchiveModal(e) {
-  if (e.target === $('archive-modal')) $('archive-modal').classList.remove('open');
 }
 
 // Test webhook

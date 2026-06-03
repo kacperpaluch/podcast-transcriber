@@ -52,10 +52,11 @@ Przez interfejs webowy:
 
 1. **Kanały RSS** → dodaj kanały (własna nazwa + URL RSS + język). Przy każdym kanale:
    - **Pobierz ostatni** — dodaje najnowszy odcinek z RSS do kolejki
-   - **Archiwum** — przegląda wszystkie odcinki z RSS i pozwala wymusić transkrypcję dowolnego
-     (np. archiwalnego). Dodane odcinki trafiają do kolejki i są przetwarzane pojedynczo, po kolei.
 2. **Ustawienia** → interwał sprawdzania, model transkrypcji, URL webhooka n8n
-3. **Odcinki** → kolejka, statusy, podgląd transkrypcji
+3. **Odcinki** → kolejka, statusy, podgląd transkrypcji. Lista ma filtr statusu — aby wymusić
+   transkrypcję archiwalnego odcinka, wybierz filtr **Pominięte (archiwalne)** i kliknij
+   **Transkrybuj** przy wybranym odcinku. Trafia on do kolejki i jest przetwarzany po kolei
+   (sekwencyjnie). Można też **Transkrybuj ponownie** dla ukończonych odcinków.
 4. **Panel główny** → statystyki, aktywna transkrypcja z paskiem postępu oraz lista wszystkich
    odcinków (sortowana od najnowszych, stronicowana po 30)
 5. **Historia webhooków** → log wysłanych webhooków z możliwością ponownego wysłania
