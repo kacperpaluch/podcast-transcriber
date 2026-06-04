@@ -32,3 +32,7 @@ env/
 
 # Docker
 *.log
+
+# Lokalne konfiguracje (nie commituj)
+docker-compose-*.yaml
+docker-compose-*.yml
