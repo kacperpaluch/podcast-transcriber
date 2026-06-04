@@ -87,7 +87,7 @@ def init_db():
             conn.execute("ALTER TABLE feeds ADD COLUMN language TEXT")
 
         # Migration: make episodes.feed_id nullable + add external metadata columns
-        ep_cols = {c["name"]: c for c in conn.execute("PRAGMA table_info(episodes)").fetchall()}
+        ep_cols = {c["name"]: dict(c) for c in conn.execute("PRAGMA table_info(episodes)").fetchall()}
         if ep_cols.get("feed_id", {}).get("notnull", 0) == 1:
             # SQLite can't ALTER COLUMN — recreate table without NOT NULL on feed_id
             conn.executescript("""
