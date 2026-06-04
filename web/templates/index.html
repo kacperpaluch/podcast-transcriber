@@ -43,8 +43,6 @@
   .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 16px; }
   .pagination button:disabled { opacity: .4; cursor: not-allowed; }
   .pagination .page-info { font-size: 13px; color: #94a3b8; }
-  .badge-enabled { background: #14532d; color: #86efac; }
-  .badge-disabled { background: #1e293b; color: #64748b; }
   .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 16px; }
   .stat { background: #0f172a; border-radius: 8px; padding: 16px; text-align: center; }
   .stat-num { font-size: 28px; font-weight: 700; color: #38bdf8; }
@@ -52,12 +50,6 @@
   .alert { padding: 12px 16px; border-radius: 6px; font-size: 13px; margin-bottom: 16px; }
   .alert-success { background: #14532d; color: #86efac; border: 1px solid #166534; }
   .alert-error { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
-  .toggle { position: relative; display: inline-block; width: 40px; height: 22px; }
-  .toggle input { opacity: 0; width: 0; height: 0; }
-  .slider { position: absolute; inset: 0; background: #334155; border-radius: 22px; cursor: pointer; transition: .2s; }
-  .slider::before { content:''; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: .2s; }
-  input:checked + .slider { background: #0284c7; }
-  input:checked + .slider::before { transform: translateX(18px); }
   .section { display: none; }
   .section.active { display: block; }
   .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 100; align-items: center; justify-content: center; }
@@ -77,7 +69,7 @@
   <nav>
     <div class="logo">🎙 Podcast<br>Transcriber</div>
     <a class="active" data-section="dashboard" onclick="showSection('dashboard', this)">Panel główny</a>
-    <a data-section="feeds" onclick="showSection('feeds', this)">Kanały RSS</a>
+    <a data-section="add" onclick="showSection('add', this)">Dodaj transkrypcję</a>
     <a data-section="episodes" onclick="showSection('episodes', this)">Odcinki</a>
     <a data-section="history" onclick="showSection('history', this)">Historia webhooków</a>
     <a data-section="settings" onclick="showSection('settings', this)">Ustawienia</a>
@@ -90,7 +82,6 @@
       <div class="card">
         <h2>Statystyki</h2>
         <div class="stat-grid" id="stats-grid">
-          <div class="stat"><div class="stat-num" id="stat-feeds">–</div><div class="stat-label">Aktywne kanały</div></div>
           <div class="stat"><div class="stat-num" id="stat-queued">–</div><div class="stat-label">W kolejce</div></div>
           <div class="stat"><div class="stat-num" id="stat-transcribing">–</div><div class="stat-label">Transkrybowane</div></div>
           <div class="stat"><div class="stat-num" id="stat-done">–</div><div class="stat-label">Gotowe</div></div>
@@ -114,32 +105,21 @@
       </div>
     </div>
 
-    <!-- HISTORY -->
-    <div id="section-history" class="section">
-      <h1>Historia webhooków</h1>
+    <!-- ADD TRANSCRIPTION -->
+    <div id="section-add" class="section">
+      <h1>Dodaj transkrypcję</h1>
       <div class="card">
-        <div id="webhook-log-table"></div>
-      </div>
-    </div>
-
-    <!-- FEEDS -->
-    <div id="section-feeds" class="section">
-      <h1>Kanały RSS</h1>
-      <div class="card">
-        <h2>Dodaj kanał</h2>
-        <div id="feed-alert"></div>
+        <h2>Kolejka nowej transkrypcji</h2>
+        <p style="font-size:13px;color:#94a3b8;margin-bottom:20px">Wklej URL pliku audio — transkrypcja zostanie dodana do kolejki i przetworzona sekwencyjnie. Wyniki trafią webhookiem do n8n.</p>
+        <div id="add-alert"></div>
+        <div class="form-group" style="margin-bottom:16px">
+          <label>URL pliku audio *</label>
+          <input id="add-url" type="url" placeholder="https://example.com/podcast.mp3">
+        </div>
         <div class="form-row">
-          <div class="form-group">
-            <label>Nazwa kanału (własna)</label>
-            <input id="feed-name" type="text" placeholder="np. Huberman Lab">
-          </div>
-          <div class="form-group">
-            <label>URL RSS</label>
-            <input id="feed-url" type="url" placeholder="https://...">
-          </div>
           <div class="form-group" style="min-width:120px;max-width:160px">
             <label>Język</label>
-            <select id="feed-language">
+            <select id="add-language">
               <option value="">auto</option>
               <option value="pl">pl – polski</option>
               <option value="en">en – angielski</option>
@@ -149,14 +129,29 @@
               <option value="ru">ru – rosyjski</option>
             </select>
           </div>
-          <div style="display:flex;align-items:flex-end">
-            <button class="btn-primary" onclick="addFeed()">Dodaj</button>
+          <div class="form-group">
+            <label>Tytuł odcinka (opcjonalnie)</label>
+            <input id="add-title" type="text" placeholder="np. Odcinek 123 — temat">
+          </div>
+          <div class="form-group">
+            <label>Nazwa kanału (opcjonalnie)</label>
+            <input id="add-feed-name" type="text" placeholder="np. Mój podcast">
           </div>
         </div>
+        <button class="btn-primary" onclick="queueTranscription()">Dodaj do kolejki</button>
       </div>
-      <div class="card">
-        <h2>Lista kanałów</h2>
-        <div id="feeds-table"></div>
+      <div class="card" style="border-color:#1e3a5f">
+        <h2 style="color:#93c5fd">Integracja z n8n</h2>
+        <p style="font-size:13px;color:#94a3b8;margin-bottom:12px">n8n może automatycznie kolejkować transkrypcje przez API:</p>
+        <pre style="background:#0f172a;padding:16px;border-radius:6px;font-size:12px;color:#94a3b8;overflow-x:auto">POST /api/transcribe
+{
+  "audio_url": "https://...",
+  "language": "pl",
+  "episode_title": "Tytuł odcinka",
+  "feed_name": "Nazwa kanału",
+  "guid": "opcjonalny-unikalny-id"
+}
+→ 202 Accepted  {"job_id": 42}</pre>
       </div>
     </div>
 
@@ -176,16 +171,18 @@
               <option value="skipped">Pominięte (archiwalne)</option>
             </select>
           </div>
-          <div class="form-group" style="min-width:140px;max-width:200px">
-            <label>Kanał</label>
-            <select id="filter-feed" onchange="loadEpisodes()">
-              <option value="">Wszystkie</option>
-            </select>
-          </div>
         </div>
       </div>
       <div class="card">
         <div id="episodes-table"></div>
+      </div>
+    </div>
+
+    <!-- HISTORY -->
+    <div id="section-history" class="section">
+      <h1>Historia webhooków</h1>
+      <div class="card">
+        <div id="webhook-log-table"></div>
       </div>
     </div>
 
@@ -196,10 +193,6 @@
         <h2>Konfiguracja</h2>
         <div id="settings-alert"></div>
         <div class="form-row">
-          <div class="form-group">
-            <label>Interwał sprawdzania RSS (minuty)</label>
-            <input id="s-interval" type="number" min="1" max="1440">
-          </div>
           <div class="form-group">
             <label>Model transkrypcji</label>
             <select id="s-model">
@@ -251,7 +244,6 @@ function showSection(name, el) {
   $('section-' + name).classList.add('active');
   el.classList.add('active');
   if (name === 'dashboard') loadDashboard();
-  if (name === 'feeds') loadFeeds();
   if (name === 'episodes') loadEpisodes();
   if (name === 'history') loadHistory();
   if (name === 'settings') loadSettings();
@@ -295,7 +287,6 @@ const DASH_PAGE_SIZE = 30;
 async function loadDashboard() {
   try {
     const stats = await api('GET', '/api/stats');
-    $('stat-feeds').textContent = stats.active_feeds ?? 0;
     const ep = stats.episodes || {};
     $('stat-queued').textContent = ep.queued ?? 0;
     $('stat-transcribing').textContent = ep.transcribing ?? 0;
@@ -364,89 +355,42 @@ async function refreshActiveTranscription() {
       $('active-time-label').textContent = '';
     }
 
-    // Odśwież co 15s dopóki trwa transkrypcja
     progressTimer = setTimeout(refreshActiveTranscription, 15000);
   } catch {
     $('active-transcription-card').style.display = 'none';
   }
 }
 
-// Feeds
-async function loadFeeds() {
-  try {
-    const feeds = await api('GET', '/api/feeds');
-    if (!feeds.length) {
-      $('feeds-table').innerHTML = '<div class="empty-state">Brak kanałów — dodaj pierwszy powyżej</div>';
-      return;
-    }
-    $('feeds-table').innerHTML = `
-      <table>
-        <thead><tr>
-          <th>Nazwa</th><th>URL RSS</th><th>Tytuł z RSS</th><th>Język</th><th>Aktywny</th><th>Akcje</th>
-        </tr></thead>
-        <tbody>${feeds.map(f => `
-          <tr>
-            <td><strong>${esc(f.display_name)}</strong></td>
-            <td style="font-size:12px;color:#64748b;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.url)}</td>
-            <td style="font-size:12px;color:#94a3b8">${esc(f.rss_feed_title || '–')}</td>
-            <td><select style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:2px 6px;font-size:12px" onchange="api('PATCH','/api/feeds/${f.id}',{language:this.value||null}).catch(e=>alert(e.message))">
-              ${['','pl','en','de','fr','uk','ru'].map(l=>`<option value="${l}" ${(f.language||'')==l?'selected':''}>${l||'auto'}</option>`).join('')}
-            </select></td>
-            <td><label class="toggle"><input type="checkbox" ${f.enabled?'checked':''} onchange="toggleFeed(${f.id}, this.checked)"><span class="slider"></span></label></td>
-            <td style="display:flex;gap:6px;flex-wrap:wrap">
-              <button class="btn-ghost btn-sm" onclick="fetchLatest(${f.id}, this)" title="Pobierz ostatni odcinek z RSS i dodaj do kolejki">Pobierz ostatni</button>
-              <button class="btn-danger btn-sm" onclick="deleteFeed(${f.id})">Usuń</button>
-            </td>
-          </tr>`).join('')}
-        </tbody>
-      </table>`;
-  } catch(e) {
-    $('feeds-table').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+// Add transcription
+async function queueTranscription() {
+  const url = $('add-url').value.trim();
+  $('add-alert').innerHTML = '';
+  if (!url) {
+    $('add-alert').innerHTML = '<div class="alert alert-error">URL pliku audio jest wymagany</div>';
+    return;
   }
-}
-
-async function addFeed() {
-  const name = $('feed-name').value.trim();
-  const url = $('feed-url').value.trim();
-  $('feed-alert').innerHTML = '';
   try {
-    const language = $('feed-language').value || null;
-    await api('POST', '/api/feeds', { display_name: name, url, language });
-    $('feed-name').value = '';
-    $('feed-url').value = '';
-    $('feed-alert').innerHTML = '<div class="alert alert-success">Kanał dodany</div>';
-    loadFeeds();
+    const data = await api('POST', '/api/transcribe', {
+      audio_url: url,
+      language: $('add-language').value || null,
+      episode_title: $('add-title').value.trim() || null,
+      feed_name: $('add-feed-name').value.trim() || null,
+    });
+    $('add-url').value = '';
+    $('add-title').value = '';
+    $('add-feed-name').value = '';
+    $('add-alert').innerHTML = `<div class="alert alert-success">Dodano do kolejki (ID: ${data.job_id})</div>`;
   } catch(e) {
-    $('feed-alert').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
+    $('add-alert').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
   }
-}
-
-async function toggleFeed(id, enabled) {
-  try { await api('PATCH', `/api/feeds/${id}`, { enabled }); }
-  catch(e) { alert(e.message); loadFeeds(); }
-}
-
-async function deleteFeed(id) {
-  if (!confirm('Usunąć kanał? Wszystkie powiązane odcinki zostaną usunięte.')) return;
-  try { await api('DELETE', `/api/feeds/${id}`); loadFeeds(); }
-  catch(e) { alert(e.message); }
 }
 
 // Episodes
 async function loadEpisodes() {
   try {
-    const feeds = await api('GET', '/api/feeds');
-    const sel = $('filter-feed');
-    const prev = sel.value;
-    sel.innerHTML = '<option value="">Wszystkie</option>' +
-      feeds.map(f => `<option value="${f.id}" ${prev==f.id?'selected':''}>${esc(f.display_name)}</option>`).join('');
-  } catch {}
-  try {
     const status = $('filter-status').value;
-    const feedId = $('filter-feed').value;
     let url = '/api/episodes?limit=100';
     if (status) url += `&status=${status}`;
-    if (feedId) url += `&feed_id=${feedId}`;
     const episodes = await api('GET', url);
     if (!episodes.length) {
       $('episodes-table').innerHTML = '<div class="empty-state">Brak odcinków dla wybranych filtrów</div>';
@@ -512,7 +456,6 @@ async function retryEpisode(id) {
 async function loadSettings() {
   try {
     const s = await api('GET', '/api/settings');
-    $('s-interval').value = s.check_interval_minutes || 30;
     $('s-model').value = s.whisper_model || 'large-v3-turbo';
     $('s-webhook').value = s.webhook_url || '';
   } catch {}
@@ -522,7 +465,6 @@ async function saveSettings() {
   $('settings-alert').innerHTML = '';
   try {
     await api('PUT', '/api/settings', {
-      check_interval_minutes: parseInt($('s-interval').value),
       whisper_model: $('s-model').value,
       webhook_url: $('s-webhook').value,
     });
@@ -575,10 +517,7 @@ async function resendWebhook(episodeId, btn) {
     } else {
       btn.textContent = `HTTP ${data.status_code || '?'}`;
       btn.style.color = '#fb923c';
-      // Pokaż hint co zrobić przy 404 od n8n
-      if (data.status_code === 404) {
-        showWebhookHint();
-      }
+      if (data.status_code === 404) showWebhookHint();
     }
     setTimeout(() => { btn.textContent = orig; btn.style.color = ''; btn.disabled = false; loadHistory(); }, 3000);
   } catch(e) {
@@ -599,33 +538,6 @@ function showWebhookHint() {
   hint.innerHTML = '<strong>n8n zwrócił 404</strong> — workflow nie jest aktywny. W n8n otwórz workflow i przełącz go w tryb <strong>Production</strong> (przełącznik obok przycisku Save).';
   el.insertBefore(hint, el.firstChild);
   setTimeout(() => hint.remove(), 8000);
-}
-
-// Fetch latest episode
-async function fetchLatest(feedId, btn) {
-  const orig = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Pobieram...';
-  try {
-    const data = await api('POST', `/api/feeds/${feedId}/fetch-latest`);
-    const msg = data.message || (data.queued ? 'Dodano do kolejki' : 'Już w kolejce');
-    // Krótkie wizualne potwierdzenie na przycisku
-    btn.textContent = data.queued ? '✓ Dodano' : '— Już jest';
-    btn.style.color = data.queued ? '#86efac' : '#94a3b8';
-    setTimeout(() => {
-      btn.textContent = orig;
-      btn.style.color = '';
-      btn.disabled = false;
-    }, 2500);
-    // Odśwież listę odcinków jeśli jesteśmy na tej zakładce
-    if ($('section-episodes').classList.contains('active')) loadEpisodes();
-  } catch(e) {
-    btn.textContent = 'Błąd';
-    btn.style.color = '#f87171';
-    setTimeout(() => { btn.textContent = orig; btn.style.color = ''; btn.disabled = false; }, 3000);
-    // Pokaż szczegóły błędu w alertcie feeds
-    $('feed-alert').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
-  }
 }
 
 // Test webhook

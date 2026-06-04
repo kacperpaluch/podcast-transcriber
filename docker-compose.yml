@@ -19,19 +19,6 @@ services:
       - DB_PATH=/data/app.db
     mem_limit: 300m
 
-  scheduler:
-    build:
-      context: .
-      dockerfile: scheduler/Dockerfile
-    image: ${IMAGE_PREFIX:-}podcast-scheduler:${TAG:-latest}
-    container_name: podcast-scheduler
-    restart: unless-stopped
-    volumes:
-      - podcast_data:/data
-    environment:
-      - DB_PATH=/data/app.db
-    mem_limit: 200m
-
   worker-controller:
     build:
       context: .

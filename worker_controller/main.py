@@ -283,9 +283,10 @@ def send_webhook(episode_id: int) -> bool:
         row = conn.execute(
             """SELECT e.id, e.guid, e.rss_title, e.audio_url, e.published_at,
                       e.transcript, e.language, e.duration_seconds,
-                      f.display_name as feed_name, f.url as feed_url,
-                      f.rss_feed_title
-               FROM episodes e JOIN feeds f ON f.id = e.feed_id
+                      COALESCE(f.display_name, e.feed_name) as feed_name,
+                      COALESCE(f.url, e.feed_url) as feed_url,
+                      COALESCE(f.rss_feed_title, e.rss_feed_title) as rss_feed_title
+               FROM episodes e LEFT JOIN feeds f ON f.id = e.feed_id
                WHERE e.id=?""",
             (episode_id,),
         ).fetchone()
@@ -344,9 +345,12 @@ def process_episode(episode):
     episode_id = episode["id"]
     audio_url = episode["audio_url"]
     model = get_setting("whisper_model", "large-v3-turbo")
-    with db.db() as conn:
-        feed_row = conn.execute("SELECT language FROM feeds WHERE id=?", (episode["feed_id"],)).fetchone()
-    feed_language = feed_row["language"] if feed_row else None
+    # Language: use episode's own field; fall back to feed language for legacy RSS episodes
+    feed_language = episode.get("language")
+    if not feed_language and episode.get("feed_id"):
+        with db.db() as conn:
+            feed_row = conn.execute("SELECT language FROM feeds WHERE id=?", (episode["feed_id"],)).fetchone()
+        feed_language = feed_row["language"] if feed_row else None
 
     log.info("Processing episode %d: %s", episode_id, episode["rss_title"] or guid_short(episode["guid"]))
 
@@ -454,7 +458,7 @@ def main():
             # Pick exactly ONE queued episode (FIFO)
             with db.db() as conn:
                 episode = conn.execute(
-                    """SELECT id, feed_id, guid, rss_title, audio_url
+                    """SELECT id, feed_id, guid, rss_title, audio_url, language
                        FROM episodes WHERE status='queued'
                        ORDER BY created_at ASC, id ASC
                        LIMIT 1"""

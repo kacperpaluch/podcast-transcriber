@@ -1,6 +1,6 @@
 import sys
 import os
-import hashlib
+import uuid
 sys.path.insert(0, "/app/shared")
 
 from fastapi import FastAPI, HTTPException, Request
@@ -8,7 +8,6 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import Optional
-import feedparser
 import httpx
 import db
 
@@ -22,20 +21,19 @@ db.init_db()
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
-class FeedCreate(BaseModel):
-    display_name: str
-    url: str
+class TranscribeRequest(BaseModel):
+    audio_url: str
     language: Optional[str] = None
-
-
-class FeedUpdate(BaseModel):
-    display_name: Optional[str] = None
-    enabled: Optional[bool] = None
-    language: Optional[str] = None
+    episode_title: Optional[str] = None
+    feed_name: Optional[str] = None
+    rss_feed_title: Optional[str] = None
+    feed_url: Optional[str] = None
+    guid: Optional[str] = None
+    published_at: Optional[str] = None
+    duration_seconds: Optional[int] = None
 
 
 class SettingsUpdate(BaseModel):
-    check_interval_minutes: Optional[int] = None
     whisper_model: Optional[str] = None
     webhook_url: Optional[str] = None
 
@@ -47,75 +45,45 @@ async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-# ── Feeds API ─────────────────────────────────────────────────────────────────
+# ── Transcribe API ────────────────────────────────────────────────────────────
 
-@app.get("/api/feeds")
-def list_feeds():
+@app.post("/api/transcribe", status_code=202)
+def queue_transcription(req: TranscribeRequest):
+    if not req.audio_url or not req.audio_url.strip():
+        raise HTTPException(400, "audio_url is required")
+    guid = req.guid or str(uuid.uuid4())
     with db.db() as conn:
-        rows = conn.execute(
-            "SELECT id, display_name, url, enabled, rss_feed_title, language, created_at FROM feeds ORDER BY id"
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-@app.post("/api/feeds", status_code=201)
-def add_feed(feed: FeedCreate):
-    if not feed.display_name.strip():
-        raise HTTPException(400, "display_name is required")
-    if not feed.url.strip():
-        raise HTTPException(400, "url is required")
-    try:
-        with db.db() as conn:
+        try:
             conn.execute(
-                "INSERT INTO feeds(display_name, url, language) VALUES(?, ?, ?)",
-                (feed.display_name.strip(), feed.url.strip(), feed.language or None),
+                """INSERT INTO episodes(feed_id, guid, rss_title, audio_url, published_at,
+                       duration_seconds, language, feed_name, feed_url, rss_feed_title)
+                   VALUES(NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (guid, req.episode_title, req.audio_url.strip(), req.published_at,
+                 req.duration_seconds, req.language, req.feed_name, req.feed_url,
+                 req.rss_feed_title),
             )
-            row = conn.execute(
-                "SELECT id, display_name, url, enabled, rss_feed_title, language FROM feeds WHERE url=?",
-                (feed.url.strip(),),
-            ).fetchone()
-        return dict(row)
-    except Exception as e:
-        if "UNIQUE" in str(e):
-            raise HTTPException(409, "Feed URL already exists")
-        raise HTTPException(500, str(e))
+            job_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+        except Exception as e:
+            if "UNIQUE" in str(e):
+                raise HTTPException(409, f"Episode with guid '{guid}' already exists")
+            raise HTTPException(500, str(e))
+    return {"job_id": job_id}
 
 
-@app.patch("/api/feeds/{feed_id}")
-def update_feed(feed_id: int, update: FeedUpdate):
+@app.get("/api/jobs/{job_id}")
+def get_job_status(job_id: int):
     with db.db() as conn:
-        row = conn.execute("SELECT id FROM feeds WHERE id=?", (feed_id,)).fetchone()
-        if not row:
-            raise HTTPException(404, "Feed not found")
-        if update.display_name is not None:
-            conn.execute(
-                "UPDATE feeds SET display_name=? WHERE id=?",
-                (update.display_name.strip(), feed_id),
-            )
-        if update.enabled is not None:
-            conn.execute(
-                "UPDATE feeds SET enabled=? WHERE id=?",
-                (1 if update.enabled else 0, feed_id),
-            )
-        if update.language is not None:
-            conn.execute(
-                "UPDATE feeds SET language=? WHERE id=?",
-                (update.language or None, feed_id),
-            )
         row = conn.execute(
-            "SELECT id, display_name, url, enabled, rss_feed_title, language FROM feeds WHERE id=?",
-            (feed_id,),
+            "SELECT id, status, rss_title, error, duration_seconds, transcribed_seconds FROM episodes WHERE id=?",
+            (job_id,),
         ).fetchone()
-    return dict(row)
-
-
-@app.delete("/api/feeds/{feed_id}", status_code=204)
-def delete_feed(feed_id: int):
-    with db.db() as conn:
-        row = conn.execute("SELECT id FROM feeds WHERE id=?", (feed_id,)).fetchone()
-        if not row:
-            raise HTTPException(404, "Feed not found")
-        conn.execute("DELETE FROM feeds WHERE id=?", (feed_id,))
+    if not row:
+        raise HTTPException(404, "Job not found")
+    d = dict(row)
+    dur = d.get("duration_seconds") or 0
+    done = d.get("transcribed_seconds") or 0
+    d["progress_pct"] = min(99, int(done / dur * 100)) if dur > 0 else None
+    return d
 
 
 # ── Settings API ──────────────────────────────────────────────────────────────
@@ -131,13 +99,6 @@ def get_settings():
 def update_settings(update: SettingsUpdate):
     allowed_models = ["large-v3-turbo", "large-v3", "medium", "small", "parakeet-tdt-0.6b-v3"]
     with db.db() as conn:
-        if update.check_interval_minutes is not None:
-            if update.check_interval_minutes < 1:
-                raise HTTPException(400, "Interval must be >= 1 minute")
-            conn.execute(
-                "INSERT OR REPLACE INTO settings(key,value) VALUES('check_interval_minutes',?)",
-                (str(update.check_interval_minutes),),
-            )
         if update.whisper_model is not None:
             if update.whisper_model not in allowed_models:
                 raise HTTPException(400, f"Model must be one of: {allowed_models}")
@@ -156,20 +117,16 @@ def update_settings(update: SettingsUpdate):
 # ── Episodes API ──────────────────────────────────────────────────────────────
 
 @app.get("/api/episodes")
-def list_episodes(feed_id: Optional[int] = None, status: Optional[str] = None,
-                  limit: int = 50, offset: int = 0):
+def list_episodes(status: Optional[str] = None, limit: int = 50, offset: int = 0):
     query = """
-        SELECT e.id, e.feed_id, f.display_name as feed_name, e.rss_title,
+        SELECT e.id, e.feed_id, COALESCE(f.display_name, e.feed_name) as feed_name, e.rss_title,
                e.status, e.language, e.duration_seconds, e.error,
                e.published_at, e.created_at, e.guid
         FROM episodes e
-        JOIN feeds f ON f.id = e.feed_id
+        LEFT JOIN feeds f ON f.id = e.feed_id
         WHERE 1=1
     """
     params = []
-    if feed_id is not None:
-        query += " AND e.feed_id=?"
-        params.append(feed_id)
     if status is not None:
         query += " AND e.status=?"
         params.append(status)
@@ -182,12 +139,11 @@ def list_episodes(feed_id: Optional[int] = None, status: Optional[str] = None,
 
 @app.get("/api/episodes/active")
 def get_active_episode():
-    """Zwraca aktualnie transkrybowany odcinek z procentem postępu."""
     with db.db() as conn:
         row = conn.execute(
-            """SELECT e.id, e.rss_title, f.display_name as feed_name,
+            """SELECT e.id, e.rss_title, COALESCE(f.display_name, e.feed_name) as feed_name,
                       e.duration_seconds, e.transcribed_seconds, e.status
-               FROM episodes e JOIN feeds f ON f.id = e.feed_id
+               FROM episodes e LEFT JOIN feeds f ON f.id = e.feed_id
                WHERE e.status = 'transcribing'
                LIMIT 1""",
         ).fetchone()
@@ -218,8 +174,10 @@ def send_webhook_now(episode_id: int):
         row = conn.execute(
             """SELECT e.id, e.guid, e.rss_title, e.audio_url, e.published_at,
                       e.transcript, e.language, e.duration_seconds, e.status,
-                      f.display_name as feed_name, f.url as feed_url, f.rss_feed_title
-               FROM episodes e JOIN feeds f ON f.id = e.feed_id
+                      COALESCE(f.display_name, e.feed_name) as feed_name,
+                      COALESCE(f.url, e.feed_url) as feed_url,
+                      COALESCE(f.rss_feed_title, e.rss_feed_title) as rss_feed_title
+               FROM episodes e LEFT JOIN feeds f ON f.id = e.feed_id
                WHERE e.id=?""",
             (episode_id,),
         ).fetchone()
@@ -265,13 +223,11 @@ def send_webhook_now(episode_id: int):
             (episode_id, status_code, 1 if ok else 0, error_msg),
         )
 
-    # Zawsze zwracamy 200 — frontend sam ocenia ok/error na podstawie pola ok
     return {"ok": ok, "status_code": status_code, "error": error_msg}
 
 
 @app.post("/api/episodes/{episode_id}/retry")
 def retry_episode(episode_id: int):
-    """Dodaje odcinek (z powrotem) do kolejki — działa dla error/skipped/done."""
     with db.db() as conn:
         row = conn.execute(
             "SELECT id, status FROM episodes WHERE id=?", (episode_id,)
@@ -292,12 +248,10 @@ def retry_episode(episode_id: int):
 @app.get("/api/stats")
 def get_stats():
     with db.db() as conn:
-        total_feeds = conn.execute("SELECT COUNT(*) FROM feeds WHERE enabled=1").fetchone()[0]
         statuses = conn.execute(
             "SELECT status, COUNT(*) as cnt FROM episodes GROUP BY status"
         ).fetchall()
     return {
-        "active_feeds": total_feeds,
         "episodes": {r["status"]: r["cnt"] for r in statuses},
     }
 
@@ -309,10 +263,10 @@ def get_webhook_log(limit: int = 50):
     with db.db() as conn:
         rows = conn.execute(
             """SELECT wl.id, wl.episode_id, wl.sent_at, wl.status_code, wl.ok, wl.error,
-                      e.rss_title, f.display_name as feed_name
+                      e.rss_title, COALESCE(f.display_name, e.feed_name) as feed_name
                FROM webhook_log wl
                JOIN episodes e ON e.id = wl.episode_id
-               JOIN feeds f ON f.id = e.feed_id
+               LEFT JOIN feeds f ON f.id = e.feed_id
                ORDER BY wl.sent_at DESC
                LIMIT ?""",
             (limit,),
@@ -354,135 +308,3 @@ def test_webhook():
         raise HTTPException(504, "Webhook nie odpowiedział w ciągu 15 sekund")
     except Exception as e:
         raise HTTPException(502, f"Błąd połączenia: {e}")
-
-
-# ── Fetch latest episode ──────────────────────────────────────────────────────
-
-def _find_audio_url(entry):
-    for enc in getattr(entry, "enclosures", []):
-        url = getattr(enc, "href", "") or getattr(enc, "url", "")
-        ctype = getattr(enc, "type", "")
-        if url and ("audio" in ctype or url.lower().split("?")[0].endswith((".mp3", ".m4a", ".ogg", ".opus", ".wav"))):
-            return url
-    for link in getattr(entry, "links", []):
-        if "audio" in link.get("type", ""):
-            return link.get("href", "")
-    return None
-
-
-def _parse_date(entry):
-    import email.utils
-    published = getattr(entry, "published", None)
-    if published:
-        try:
-            t = email.utils.parsedate_to_datetime(published)
-            return t.isoformat()
-        except Exception:
-            return published
-    return None
-
-
-def _parse_duration(entry):
-    """Parsuje itunes:duration z RSS (sekundy, MM:SS lub HH:MM:SS) na sekundy."""
-    raw = str(entry.get("itunes_duration") or "").strip()
-    if not raw:
-        return None
-    try:
-        if ":" in raw:
-            sec = 0
-            for part in raw.split(":"):
-                sec = sec * 60 + int(part)
-            return sec
-        return int(float(raw))
-    except Exception:
-        return None
-
-
-@app.post("/api/feeds/{feed_id}/fetch-latest")
-def fetch_latest_episode(feed_id: int):
-    with db.db() as conn:
-        feed = conn.execute(
-            "SELECT id, display_name, url FROM feeds WHERE id=?", (feed_id,)
-        ).fetchone()
-    if not feed:
-        raise HTTPException(404, "Feed not found")
-
-    try:
-        parsed = feedparser.parse(feed["url"])
-    except Exception as e:
-        raise HTTPException(502, f"Nie można pobrać RSS: {e}")
-
-    if parsed.bozo and not parsed.entries:
-        raise HTTPException(502, f"Błąd parsowania RSS: {parsed.bozo_exception}")
-
-    # Szukamy pierwszego wpisu z plikiem audio
-    entry = None
-    audio_url = None
-    for e in parsed.entries:
-        url = _find_audio_url(e)
-        if url:
-            entry = e
-            audio_url = url
-            break
-
-    if not entry or not audio_url:
-        raise HTTPException(404, "Nie znaleziono odcinka z plikiem audio w tym feedzie")
-
-    guid = getattr(entry, "id", None) or getattr(entry, "link", None)
-    if not guid:
-        raw = f"{entry.get('title','')}{entry.get('published','')}"
-        guid = hashlib.sha1(raw.encode()).hexdigest()
-
-    rss_title = getattr(entry, "title", None)
-    published_at = _parse_date(entry)
-    duration = _parse_duration(entry)
-    rss_feed_title = getattr(parsed.feed, "title", None)
-
-    # Aktualizuj rss_feed_title w feedzie
-    with db.db() as conn:
-        conn.execute("UPDATE feeds SET rss_feed_title=? WHERE id=?", (rss_feed_title, feed_id))
-
-    # Sprawdź czy odcinek już istnieje
-    with db.db() as conn:
-        existing = conn.execute(
-            "SELECT id, status FROM episodes WHERE guid=?", (guid,)
-        ).fetchone()
-
-    if existing:
-        ep_id = existing["id"]
-        status = existing["status"]
-        if status in ("queued", "transcribing"):
-            return {
-                "queued": False,
-                "episode_id": ep_id,
-                "rss_title": rss_title,
-                "message": f"Odcinek już jest w kolejce (status: {status})",
-            }
-        # Już przetworzony lub błąd — reset do queued żeby przetestować ponownie
-        with db.db() as conn:
-            conn.execute(
-                "UPDATE episodes SET status='queued', error=NULL, transcript=NULL, audio_url=?, duration_seconds=? WHERE id=?",
-                (audio_url, duration, ep_id),
-            )
-        return {
-            "queued": True,
-            "episode_id": ep_id,
-            "rss_title": rss_title,
-            "message": f"Odcinek ponownie dodany do kolejki (był: {status})",
-        }
-    else:
-        with db.db() as conn:
-            conn.execute(
-                """INSERT INTO episodes(feed_id, guid, rss_title, audio_url, published_at, duration_seconds)
-                   VALUES(?, ?, ?, ?, ?, ?)""",
-                (feed_id, guid, rss_title, audio_url, published_at, duration),
-            )
-            ep = conn.execute(
-                "SELECT id FROM episodes WHERE guid=?", (guid,)
-            ).fetchone()
-        return {
-            "queued": True,
-            "episode_id": ep["id"],
-            "rss_title": rss_title,
-            "message": "Najnowszy odcinek dodany do kolejki",
-        }

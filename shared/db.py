@@ -46,7 +46,7 @@ def init_db():
 
             CREATE TABLE IF NOT EXISTS episodes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                feed_id INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+                feed_id INTEGER REFERENCES feeds(id) ON DELETE CASCADE,
                 guid TEXT NOT NULL UNIQUE,
                 rss_title TEXT,
                 audio_url TEXT NOT NULL,
@@ -57,6 +57,9 @@ def init_db():
                 duration_seconds INTEGER,
                 transcribed_seconds INTEGER,
                 error TEXT,
+                feed_name TEXT,
+                feed_url TEXT,
+                rss_feed_title TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -74,11 +77,55 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_webhook_log_episode ON webhook_log(episode_id);
 
-            INSERT OR IGNORE INTO settings(key, value) VALUES ('check_interval_minutes', '30');
             INSERT OR IGNORE INTO settings(key, value) VALUES ('whisper_model', 'large-v3-turbo');
             INSERT OR IGNORE INTO settings(key, value) VALUES ('webhook_url', '');
         """)
+
         # Migration: add language column to feeds if missing
-        cols = [r["name"] for r in conn.execute("PRAGMA table_info(feeds)").fetchall()]
-        if "language" not in cols:
+        feeds_cols = [r["name"] for r in conn.execute("PRAGMA table_info(feeds)").fetchall()]
+        if "language" not in feeds_cols:
             conn.execute("ALTER TABLE feeds ADD COLUMN language TEXT")
+
+        # Migration: make episodes.feed_id nullable + add external metadata columns
+        ep_cols = {c["name"]: c for c in conn.execute("PRAGMA table_info(episodes)").fetchall()}
+        if ep_cols.get("feed_id", {}).get("notnull", 0) == 1:
+            # SQLite can't ALTER COLUMN — recreate table without NOT NULL on feed_id
+            conn.executescript("""
+                PRAGMA foreign_keys=OFF;
+                ALTER TABLE episodes RENAME TO _episodes_v1;
+                CREATE TABLE episodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    feed_id INTEGER REFERENCES feeds(id) ON DELETE CASCADE,
+                    guid TEXT NOT NULL UNIQUE,
+                    rss_title TEXT,
+                    audio_url TEXT NOT NULL,
+                    published_at TEXT,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    transcript TEXT,
+                    language TEXT,
+                    duration_seconds INTEGER,
+                    transcribed_seconds INTEGER,
+                    error TEXT,
+                    feed_name TEXT,
+                    feed_url TEXT,
+                    rss_feed_title TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                INSERT INTO episodes (id, feed_id, guid, rss_title, audio_url, published_at,
+                    status, transcript, language, duration_seconds, transcribed_seconds,
+                    error, created_at)
+                    SELECT id, feed_id, guid, rss_title, audio_url, published_at,
+                    status, transcript, language, duration_seconds, transcribed_seconds,
+                    error, created_at FROM _episodes_v1;
+                DROP TABLE _episodes_v1;
+                CREATE INDEX IF NOT EXISTS idx_episodes_status ON episodes(status);
+                CREATE INDEX IF NOT EXISTS idx_episodes_feed_id ON episodes(feed_id);
+                PRAGMA foreign_keys=ON;
+            """)
+        else:
+            for col in ("feed_name", "feed_url", "rss_feed_title"):
+                if col not in ep_cols:
+                    try:
+                        conn.execute(f"ALTER TABLE episodes ADD COLUMN {col} TEXT")
+                    except Exception:
+                        pass

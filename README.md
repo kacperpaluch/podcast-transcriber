@@ -1,17 +1,18 @@
 # Podcast Transcriber
 
-Lokalny transkryber podcastów dla Raspberry Pi 4/5 (8 GB RAM). Monitoruje kanały RSS, pobiera audio, transkrybuje lokalnie (faster-whisper) i wysyła wyniki webhookiem do n8n.
+[![Docker Hub](https://img.shields.io/docker/pulls/kpa90/podcast-web?logo=docker&label=Docker%20Hub)](https://hub.docker.com/r/kpa90/podcast-web)
+
+Lokalny serwis transkrypcji podcastów dla Raspberry Pi 4/5 (8 GB RAM). Przyjmuje URL pliku audio przez API, transkrybuje lokalnie (faster-whisper lub Parakeet) i wysyła wyniki webhookiem do n8n. Monitorowanie kanałów RSS i orkiestracja obsługiwane są przez n8n.
 
 ## Architektura
 
 ```
-RSS feed → scheduler → kolejka SQLite → worker-controller → transcriber (on-demand) → webhook n8n
+n8n (RSS + logika) → POST /api/transcribe → kolejka SQLite → worker-controller → transcriber → webhook n8n
 ```
 
 | Kontener | Rola | RAM |
 |---|---|---|
 | `podcast-web` | UI + REST API (FastAPI, port 8080) | ~150 MB |
-| `podcast-scheduler` | Sprawdza RSS co N minut, kolejkuje nowe odcinki | ~100 MB |
 | `podcast-worker-controller` | FIFO queue, uruchamia transkryber sekwencyjnie | ~100 MB |
 | `podcast-transcriber` | faster-whisper CPU, uruchamiany on-demand (`--rm`) | ~2–2,5 GB |
 
@@ -22,6 +23,7 @@ RSS feed → scheduler → kolejka SQLite → worker-controller → transcriber 
 - Raspberry Pi 4 lub 5, **8 GB RAM**, Raspberry Pi OS 64-bit (ARM64)
 - Docker + Docker Compose v2
 - Dostęp do internetu
+- n8n do obsługi RSS i dalszego przetwarzania transkrypcji
 
 ## Uruchomienie
 
@@ -46,23 +48,41 @@ Przy pierwszym uruchomieniu model Whisper (~800 MB) zostanie pobrany automatyczn
 http://<adres-pi>:8080
 ```
 
+## API
+
+### POST /api/transcribe
+
+Kolejkuje nową transkrypcję. Zwraca `202 Accepted` z `job_id`.
+
+```json
+{
+  "audio_url": "https://example.com/odcinek.mp3",
+  "language": "pl",
+  "episode_title": "Tytuł odcinka",
+  "feed_name": "Nazwa kanału",
+  "rss_feed_title": "Tytuł kanału z RSS",
+  "feed_url": "https://example.com/rss.xml",
+  "guid": "opcjonalny-unikalny-id",
+  "published_at": "2026-06-01T10:00:00+00:00",
+  "duration_seconds": 3600
+}
+```
+
+Odpowiedź: `{"job_id": 42}`
+
+### GET /api/jobs/{job_id}
+
+Zwraca status transkrypcji: `queued`, `transcribing`, `done`, `error` oraz `progress_pct`.
+
 ## Konfiguracja
 
 Przez interfejs webowy:
 
-1. **Kanały RSS** → dodaj kanały (własna nazwa + URL RSS + język). Przy każdym kanale:
-   - **Pobierz ostatni** — dodaje najnowszy odcinek z RSS do kolejki
-2. **Ustawienia** → interwał sprawdzania, model transkrypcji, URL webhooka n8n
-3. **Odcinki** → kolejka, statusy, podgląd transkrypcji. Lista ma filtr statusu — aby wymusić
-   transkrypcję archiwalnego odcinka, wybierz filtr **Pominięte (archiwalne)** i kliknij
-   **Transkrybuj** przy wybranym odcinku. Trafia on do kolejki i jest przetwarzany po kolei
-   (sekwencyjnie). Można też **Transkrybuj ponownie** dla ukończonych odcinków.
-4. **Panel główny** → statystyki, aktywna transkrypcja z paskiem postępu oraz lista wszystkich
-   odcinków (sortowana od najnowszych, stronicowana po 30)
+1. **Ustawienia** → model transkrypcji, URL webhooka n8n
+2. **Dodaj transkrypcję** → ręczne kolejkowanie (przydatne do testów bez n8n)
+3. **Odcinki** → kolejka, statusy, podgląd transkrypcji
+4. **Panel główny** → statystyki, aktywna transkrypcja z paskiem postępu
 5. **Historia webhooków** → log wysłanych webhooków z możliwością ponownego wysłania
-
-> Czas trwania odcinka jest odczytywany z pola `itunes:duration` w RSS już przy dodaniu do kolejki,
-> więc widać go na liście jeszcze przed transkrypcją.
 
 ### Modele Whisper
 
@@ -75,26 +95,37 @@ Przez interfejs webowy:
 
 ### Parakeet (eksperymentalnie)
 
-Jako alternatywę dla Whispera można wybrać `parakeet-tdt-0.6b-v3` (NVIDIA Parakeet TDT, 25 języków EU
-w tym polski). Dekoder TDT jest nieautoregresyjny, więc na CPU bywa szybszy niż Whisper. Kontener
-([`ghcr.io/achetronic/parakeet`](https://github.com/achetronic/parakeet)) uruchamiany jest on-demand
-przez worker-controller i zamykany po zakończeniu, więc nie zajmuje pamięci między transkrypcjami.
+Jako alternatywę dla Whispera można wybrać `parakeet-tdt-0.6b-v3` (NVIDIA Parakeet TDT, 25 języków EU w tym polski). Dekoder TDT jest nieautoregresyjny, więc na CPU bywa szybszy niż Whisper. Kontener uruchamiany jest on-demand przez worker-controller i zamykany po zakończeniu.
 
 Uwagi dot. Raspberry Pi:
 
-- Eksport ONNX używa pełnej (kwadratowej w długości) atencji, dlatego długie audio jest dzielone na
-  fragmenty 2-minutowe (`PARAKEET_CHUNK_SECS`) i transkrybowane po kawałku — bez tego dochodzi do OOM.
-- Kontener dostaje limit 4 GB RAM z **wyłączonym swapem** (`--memory-swap=4g`). Dzięki temu przy
-  przekroczeniu limitu Docker ubija sam kontener, zamiast wpędzać cały Pi w swap i zawieszać host.
-- Każdy kanał ma w UI ustawienie **języka** — Parakeet potrzebuje go jawnie (domyślnie zgadywałby `en`).
+- Audio dzielone na fragmenty 2-minutowe (`PARAKEET_CHUNK_SECS`) — bez tego dochodzi do OOM
+- Kontener dostaje limit 4 GB RAM z **wyłączonym swapem** (`--memory-swap=4g`)
+- Język musi być podany jawnie w żądaniu (`language` w POST /api/transcribe)
 
-## Webhook do n8n
+## Integracja z n8n
 
-Payload po każdej transkrypcji:
+### Flow 1 — wykrywanie i zlecanie transkrypcji
+
+```
+RSS Feed Trigger → HTTP Request POST /api/transcribe
+```
+
+n8n wysyła POST i nie czeka na wynik (fire & forget). Transkrypcja trwa 20–60 minut.
+
+### Flow 2 — odbiór gotowej transkrypcji
+
+```
+Webhook Trigger (stały URL) → odbiera transkrypcję → przetwarza dalej
+```
+
+Ustaw ten URL jako **URL webhooka** w Ustawieniach aplikacji. Po każdej transkrypcji aplikacja automatycznie wysyła wynik na ten adres.
+
+## Webhook payload
 
 ```json
 {
-  "feed_name": "Nazwa wpisana w UI",
+  "feed_name": "Nazwa kanału",
   "rss_feed_title": "Tytuł kanału z RSS",
   "feed_url": "https://.../rss.xml",
   "episode_title": "Tytuł odcinka",
@@ -111,22 +142,17 @@ Payload po każdej transkrypcji:
 
 Użyj pliku `docker-compose.portainer.yml` — korzysta z gotowych obrazów z Docker Hub, bez potrzeby budowania lokalnie. Ustaw zmienną `HOST_DATA_PATH` na absolutną ścieżkę do katalogu danych na hoście.
 
-## Zachowanie przy pierwszym dodaniu kanału
-
-Przy pierwszym sprawdzeniu RSS scheduler **nie kolejkuje całej historii** — rejestruje ją jako `skipped` (baseline). Kolejkowane są tylko odcinki opublikowane po dodaniu kanału. Aby ręcznie dodać konkretny odcinek, użyj przycisku **Pobierz ostatni** w zakładce Kanały RSS.
-
 ## Dane
 
 | Ścieżka | Zawartość |
 |---|---|
-| `data/app.db` | SQLite: kanały, odcinki, ustawienia, logi webhooków |
+| `data/app.db` | SQLite: odcinki, ustawienia, logi webhooków |
 | `data/audio/` | Tymczasowe pliki audio (usuwane po wysłaniu webhooka) |
 | `data/models/` | Cache modeli Whisper |
 
 ## Logi
 
 ```bash
-docker compose logs -f scheduler
 docker compose logs -f worker-controller
 docker compose logs -f web
 ```

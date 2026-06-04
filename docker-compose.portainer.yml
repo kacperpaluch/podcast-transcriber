@@ -23,16 +23,6 @@ services:
       - DB_PATH=/data/app.db
     mem_limit: 300m
 
-  scheduler:
-    image: kpa90/podcast-scheduler:latest
-    container_name: podcast-scheduler
-    restart: unless-stopped
-    volumes:
-      - podcast_data:/data
-    environment:
-      - DB_PATH=/data/app.db
-    mem_limit: 200m
-
   worker-controller:
     image: kpa90/podcast-worker-controller:latest
     container_name: podcast-worker-controller
