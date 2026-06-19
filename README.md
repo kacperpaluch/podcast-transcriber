@@ -164,7 +164,13 @@ docker compose logs -f web
 ## Build i push na Docker Hub
 
 ```bash
-./build-push.sh <login-dockerhub>          # build + push :latest
-./build-push.sh <login-dockerhub> 1.0.0    # build + push z tagiem wersji
+./build-push.sh <login-dockerhub>          # build + push :latest + :<git-sha>
+./build-push.sh <login-dockerhub> 1.0.0    # build + push z tagiem wersji + :<git-sha>
 PUSH=0 ./build-push.sh <login-dockerhub>   # tylko build lokalny
 ```
+
+Każdy build taguje obraz dwoma tagami: `:latest` (ruchomy) + `:<git-sha>` (stały backup do rollbacku).
+
+## Historia zmian
+
+- **2026-06-19** — porządki: usunięto nieużywaną zależność `python-multipart` z web, martwy wewnętrzny import `json` w worker-controller, komentarz opisujący niezaimplementowany timeout. Brak zmian w API.

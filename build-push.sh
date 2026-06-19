@@ -14,21 +14,23 @@ PUSH="${PUSH:-1}"
 PLATFORMS="linux/arm64,linux/amd64"
 
 PREFIX="${DOCKERHUB_USER}/"
+SHA=$(git rev-parse --short HEAD)
 
 docker buildx create --use --name multiarch 2>/dev/null || docker buildx use multiarch
 
-echo "==> Budowanie obrazów (PREFIX=$PREFIX, TAG=$TAG, platforms=$PLATFORMS)"
+echo "==> Budowanie obrazów (PREFIX=$PREFIX, TAG=$TAG, SHA=$SHA, platforms=$PLATFORMS)"
 
 build_image() {
   local name="$1"
   local dockerfile="$2"
   local target="${PREFIX}${name}:${TAG}"
-  echo "--> $target"
+  local version_target="${PREFIX}${name}:${SHA}"
+  echo "--> $target + $version_target"
   if [[ "$PUSH" == "1" ]]; then
-    docker buildx build --platform "$PLATFORMS" -f "$dockerfile" -t "$target" --push .
+    docker buildx build --platform "$PLATFORMS" -f "$dockerfile" -t "$target" -t "$version_target" --push .
   else
-    docker buildx build --platform "$PLATFORMS" -f "$dockerfile" -t "$target" --load . 2>/dev/null \
-      || docker buildx build --platform linux/arm64 -f "$dockerfile" -t "$target" --load .
+    docker buildx build --platform "$PLATFORMS" -f "$dockerfile" -t "$target" -t "$version_target" --load . 2>/dev/null \
+      || docker buildx build --platform linux/arm64 -f "$dockerfile" -t "$target" -t "$version_target" --load .
   fi
 }
 

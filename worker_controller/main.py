@@ -109,12 +109,11 @@ def run_transcriber(audio_path: str, model: str) -> bool:
 
 def _audio_duration(path: str) -> float:
     try:
-        import json as _json
         r = subprocess.run(
             ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path],
             capture_output=True, text=True, timeout=30,
         )
-        return float(_json.loads(r.stdout)["format"]["duration"])
+        return float(json.loads(r.stdout)["format"]["duration"])
     except Exception:
         return 0.0
 
@@ -368,9 +367,6 @@ def process_episode(episode):
     try:
         # Download audio
         audio_path = download_audio(audio_url, episode_id)
-
-        # Compute timeout: 2× audio duration or 4 hours max
-        # (duration not known yet at download time, so transcriber handles its own timeout)
 
         # Run transcriber (blocks until done)
         if "parakeet" in model.lower():
