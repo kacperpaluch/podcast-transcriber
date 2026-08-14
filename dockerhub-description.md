@@ -86,6 +86,8 @@ Kolejkuje przygotowanie plików MP3 dla Groq STT w n8n. Przeznaczony do użycia 
 | `EXTERNAL_STT_CHUNK_SECS` | worker | Maksymalny czas chunka, domyślnie `1800` s |
 | `EXTERNAL_STT_AUDIO_BITRATE` | worker | Bitrate przygotowanego MP3, domyślnie `32k` |
 
+Panel **Odcinki** pozwala trwale usunąć ukończony lub błędny odcinek, aby ten sam GUID można było przetworzyć ponownie przez n8n.
+
 ## Więcej informacji
 
 Pełna dokumentacja, instrukcja integracji z n8n i opis modeli Whisper/Parakeet:

@@ -422,6 +422,7 @@ function buildEpisodesTable(episodes, showActions) {
           ${e.status === 'done' ? `<button class="btn-ghost btn-sm" onclick="retryEpisode(${e.id})">Transkrybuj ponownie</button>` : ''}
           ${e.status === 'skipped' ? `<button class="btn-primary btn-sm" onclick="retryEpisode(${e.id})">Transkrybuj</button>` : ''}
           ${e.status === 'error' ? `<button class="btn-primary btn-sm" onclick="retryEpisode(${e.id})">Ponów</button>` : ''}
+          ${['done', 'error', 'skipped'].includes(e.status) ? `<button class="btn-ghost btn-sm" onclick="deleteEpisode(${e.id})">Usuń</button>` : ''}
         </td>` : ''}
       </tr>`).join('')}
     </tbody>
@@ -448,6 +449,14 @@ function closeModal(e) {
 async function retryEpisode(id) {
   try {
     await api('POST', `/api/episodes/${id}/retry`);
+    loadEpisodes();
+  } catch(e) { alert(e.message); }
+}
+
+async function deleteEpisode(id) {
+  if (!confirm('Trwale usunąć ten odcinek?\n\nPo usunięciu można go pobrać i przetworzyć ponownie przez n8n.')) return;
+  try {
+    await api('DELETE', `/api/episodes/${id}`);
     loadEpisodes();
   } catch(e) { alert(e.message); }
 }

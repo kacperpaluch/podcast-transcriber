@@ -301,6 +301,24 @@ def retry_episode(episode_id: int):
     return {"ok": True}
 
 
+@app.delete("/api/episodes/{episode_id}")
+def delete_episode(episode_id: int):
+    """Permanently remove a finished episode so its RSS GUID can be processed again."""
+    with db.db() as conn:
+        row = conn.execute(
+            "SELECT status FROM episodes WHERE id=?", (episode_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Episode not found")
+        if row["status"] in ("queued", "preparing", "prepared", "transcribing"):
+            raise HTTPException(409, "Nie można usunąć odcinka, który jest w toku")
+        conn.execute("DELETE FROM episodes WHERE id=?", (episode_id,))
+
+    # The directory name is derived solely from the numeric API path parameter.
+    shutil.rmtree(f"/data/audio/episode_{episode_id}_external_stt", ignore_errors=True)
+    return {"ok": True, "deleted_episode_id": episode_id}
+
+
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/stats")

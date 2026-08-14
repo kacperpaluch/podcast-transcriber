@@ -90,6 +90,12 @@ Pobiera pojedynczy przygotowany MP3 dla n8n w prywatnej sieci domowej.
 
 Usuwa przygotowane pliki po pomyślnej transkrypcji i podsumowaniu w n8n.
 
+### DELETE /api/episodes/{episode_id}
+
+Trwale usuwa zakończony lub błędny odcinek oraz jego pliki robocze. Dzięki temu ten sam GUID można ponownie uruchomić z RSS przez nową ścieżkę Groq. Endpoint nie pozwala usuwać zadań `queued`, `preparing`, `prepared` ani `transcribing`.
+
+W panelu **Odcinki** odpowiada mu przycisk **Usuń** z potwierdzeniem. Przycisk **Transkrybuj ponownie** zachowuje istniejący tryb zadania; aby przełączyć historyczny odcinek na nową ścieżkę, najpierw wybierz **Usuń**, a następnie uruchom go ponownie w n8n.
+
 ## Konfiguracja
 
 Przez interfejs webowy:
