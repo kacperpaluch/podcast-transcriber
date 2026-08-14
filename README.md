@@ -94,7 +94,7 @@ Usuwa przygotowane pliki po pomyślnej transkrypcji i podsumowaniu w n8n.
 
 Trwale usuwa zakończony, błędny lub przygotowany do zewnętrznego STT odcinek oraz jego pliki robocze. Dzięki temu ten sam GUID można ponownie uruchomić z RSS przez nową ścieżkę zewnętrznego STT. Endpoint nie pozwala usuwać zadań `queued`, `preparing` ani `transcribing`.
 
-W tabeli odcinków na **Panelu głównym** odpowiada mu przycisk **Usuń** z potwierdzeniem; działa też dla pozycji `prepared`, usuwając jej chunki i odblokowując GUID. Przycisk **Usuń całą historię** usuwa tylko odcinki zakończone, błędne i pominięte — aktywne zadania pozostają nienaruszone. Przycisk **Transkrybuj ponownie** zachowuje istniejący tryb zadania; aby przełączyć historyczny odcinek na nową ścieżkę, najpierw wybierz **Usuń**, a następnie uruchom go ponownie w n8n.
+W tabeli odcinków na **Panelu głównym** odpowiada mu przycisk **Usuń** z potwierdzeniem; działa też dla pozycji `prepared`, usuwając jej chunki i odblokowując GUID. Przycisk **Usuń całą historię** usuwa przygotowane do zewnętrznego STT, zakończone, błędne i pominięte odcinki; zadania `queued`, `preparing` i `transcribing` pozostają nienaruszone. Przycisk **Transkrybuj ponownie** zachowuje istniejący tryb zadania; aby przełączyć historyczny odcinek na nową ścieżkę, najpierw wybierz **Usuń**, a następnie uruchom go ponownie w n8n.
 
 ## Konfiguracja
 

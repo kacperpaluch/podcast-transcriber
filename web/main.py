@@ -340,13 +340,15 @@ def retry_episode(episode_id: int):
 @app.delete("/api/episodes/finished")
 def delete_finished_episodes():
     """Clear finished history without ever interrupting active work."""
-    finished_statuses = ("done", "error", "skipped")
+    # A prepared job has already left the local FIFO worker. Including it lets
+    # the user discard stale external-STT chunks and submit the same GUID again.
+    finished_statuses = ("prepared", "done", "error", "skipped")
     with db.db() as conn:
         rows = conn.execute(
-            "SELECT id FROM episodes WHERE status IN (?, ?, ?)", finished_statuses
+            "SELECT id FROM episodes WHERE status IN (?, ?, ?, ?)", finished_statuses
         ).fetchall()
         episode_ids = [row["id"] for row in rows]
-        conn.execute("DELETE FROM episodes WHERE status IN (?, ?, ?)", finished_statuses)
+        conn.execute("DELETE FROM episodes WHERE status IN (?, ?, ?, ?)", finished_statuses)
 
     for episode_id in episode_ids:
         shutil.rmtree(f"/data/audio/episode_{episode_id}_external_stt", ignore_errors=True)

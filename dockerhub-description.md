@@ -86,7 +86,7 @@ Kolejkuje przygotowanie plików MP3 dla zewnętrznego STT w n8n. Przeznaczony do
 | `EXTERNAL_STT_CHUNK_SECS` | worker | Maksymalny czas chunka, domyślnie `3600` s |
 | `EXTERNAL_STT_AUDIO_BITRATE` | worker | Bitrate przygotowanego MP3, domyślnie `32k` |
 
-Tabela odcinków na **Panelu głównym** pozwala trwale usunąć ukończony, błędny lub przygotowany do zewnętrznego STT odcinek wraz z chunkami, aby ten sam GUID można było przetworzyć ponownie przez n8n.
+Tabela odcinków na **Panelu głównym** pozwala trwale usunąć ukończony, błędny lub przygotowany do zewnętrznego STT odcinek wraz z chunkami, aby ten sam GUID można było przetworzyć ponownie przez n8n. **Usuń całą historię** obejmuje też status `prepared`, ale nigdy aktywne zadania.
 
 W panelu **Dodaj transkrypcję** można wybrać lokalną transkrypcję albo przygotowanie **FFmpeg → chunki → webhook n8n/zewnętrzny STT**. Pełna lista odcinków jest częścią Panelu głównego, sortowaną chronologicznie od najnowszych; umożliwia filtrowanie oraz bezpieczne wyczyszczenie historii bez aktywnych zadań.
 

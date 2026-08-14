@@ -272,7 +272,10 @@ function fmtDur(sec) {
 
 function fmtDate(s) {
   if (!s) return '–';
-  try { return new Date(s).toLocaleString('pl-PL', { dateStyle:'short', timeStyle:'short' }); }
+  // SQLite zapisuje datetime('now') bez offsetu, ale jest to UTC. Dopisujemy Z,
+  // aby przeglądarka nie potraktowała go błędnie jako lokalnego czasu.
+  const normalized = /(?:Z|[+-]\d\d:?\d\d)$/.test(s) ? s : s.replace(' ', 'T') + 'Z';
+  try { return new Date(normalized).toLocaleString('pl-PL', { dateStyle:'short', timeStyle:'short', timeZone:'Europe/Warsaw' }); }
   catch { return s; }
 }
 
@@ -456,7 +459,7 @@ async function deleteEpisode(id) {
 }
 
 async function deleteFinishedEpisodes() {
-  if (!confirm('Usunąć całą historię zakończonych, błędnych i pominiętych odcinków?\n\nAktywne zadania pozostaną nienaruszone.')) return;
+  if (!confirm('Usunąć całą historię: przygotowane do zewnętrznego STT, zakończone, błędne i pominięte odcinki?\n\nAktywne zadania pozostaną nienaruszone.')) return;
   try {
     const result = await api('DELETE', '/api/episodes/finished');
     alert(`Usunięto ${result.deleted_count} odcinków.`);

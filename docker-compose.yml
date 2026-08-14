@@ -17,6 +17,7 @@ services:
       - podcast_data:/data
     environment:
       - DB_PATH=/data/app.db
+      - TZ=Europe/Warsaw
     mem_limit: 300m
 
   worker-controller:
@@ -31,6 +32,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - DB_PATH=/data/app.db
+      - TZ=Europe/Warsaw
       - TRANSCRIBER_IMAGE=${IMAGE_PREFIX:-}podcast-transcriber:${TAG:-latest}
       - HOST_DATA_PATH=${PWD}/data
       - COMPOSE_NETWORK=podcast_default
