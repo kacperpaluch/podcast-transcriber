@@ -2,12 +2,14 @@
 
 [![Docker Hub](https://img.shields.io/docker/pulls/kpa90/podcast-web?logo=docker&label=Docker%20Hub)](https://hub.docker.com/r/kpa90/podcast-web)
 
-Lokalny serwis transkrypcji podcastów dla Raspberry Pi 4/5 (8 GB RAM). Przyjmuje URL pliku audio przez API, transkrybuje lokalnie (faster-whisper lub Parakeet) i wysyła wyniki webhookiem do n8n. Monitorowanie kanałów RSS i orkiestracja obsługiwane są przez n8n.
+Lokalny serwis przygotowania i transkrypcji podcastów dla Raspberry Pi 4/5 (8 GB RAM). Przyjmuje URL pliku audio przez API; może transkrybować go lokalnie (faster-whisper lub Parakeet) albo przygotować małe pliki MP3 dla zewnętrznego STT. Monitorowanie RSS, Groq STT, podsumowanie i Telegram pozostają w n8n.
 
 ## Architektura
 
 ```
 n8n (RSS + logika) → POST /api/transcribe → kolejka SQLite → worker-controller → transcriber → webhook n8n
+
+n8n (RSS + Groq) → POST /api/prepare → kolejka SQLite → FFmpeg → webhook z manifestem → Groq STT w n8n
 ```
 
 | Kontener | Rola | RAM |
@@ -37,10 +39,10 @@ cd podcast-transcriber
 ### 2. Uruchom
 
 ```bash
-HOST_DATA_PATH=$(pwd)/data docker compose up -d
+N8N_API_TOKEN=$(openssl rand -hex 32) HOST_DATA_PATH=$(pwd)/data docker compose up -d
 ```
 
-Przy pierwszym uruchomieniu model Whisper (~800 MB) zostanie pobrany automatycznie do `./data/models/` i będzie używany przy kolejnych uruchomieniach.
+Zapisz wartość `N8N_API_TOKEN` w credentialu n8n jako `X-Podcast-Token`; jest wymagana przez nową ścieżkę przygotowania audio. Przy pierwszym uruchomieniu model Whisper (~800 MB) zostanie pobrany automatycznie do `./data/models/` i będzie używany przy kolejnych uruchomieniach.
 
 ### 3. Otwórz UI
 
@@ -72,7 +74,21 @@ Odpowiedź: `{"job_id": 42}`
 
 ### GET /api/jobs/{job_id}
 
-Zwraca status transkrypcji: `queued`, `transcribing`, `done`, `error` oraz `progress_pct`.
+Zwraca status transkrypcji lub przygotowania audio: `queued`, `preparing`, `prepared`, `transcribing`, `done`, `error` oraz `progress_pct`.
+
+### POST /api/prepare
+
+Kolejkuje pobranie i przygotowanie audio do zewnętrznego STT. Endpoint wymaga nagłówka `X-Podcast-Token`, którego wartość jest taka sama jak zmienna `N8N_API_TOKEN` kontenera `podcast-web`.
+
+Żądanie ma ten sam format co `/api/transcribe`. Worker pobiera audio bezpośrednio z URL, koduje je do MP3 mono 16 kHz / 32 kbps i dzieli domyślnie na części po 30 minut. Po przygotowaniu wysyła skonfigurowany webhook do n8n z `event: "audio_prepared"`, `job_id` i manifestem chunków.
+
+### GET /api/jobs/{job_id}/chunks/{chunk_index}
+
+Pobiera pojedynczy przygotowany MP3. Wymaga `X-Podcast-Token`; jest przeznaczony wyłącznie dla n8n.
+
+### POST /api/jobs/{job_id}/cleanup
+
+Usuwa przygotowane pliki po pomyślnej transkrypcji i podsumowaniu w n8n. Wymaga `X-Podcast-Token`.
 
 ## Konfiguracja
 
@@ -105,7 +121,7 @@ Uwagi dot. Raspberry Pi:
 
 ## Integracja z n8n
 
-### Flow 1 — wykrywanie i zlecanie transkrypcji
+### Flow 1 — lokalna transkrypcja (dotychczasowy)
 
 ```
 RSS Feed Trigger → HTTP Request POST /api/transcribe
@@ -121,10 +137,22 @@ Webhook Trigger (stały URL) → odbiera transkrypcję → przetwarza dalej
 
 Ustaw ten URL jako **URL webhooka** w Ustawieniach aplikacji. Po każdej transkrypcji aplikacja automatycznie wysyła wynik na ten adres.
 
+### Flow 3 — Groq STT w n8n (rekomendowany)
+
+```
+RSS Feed Trigger → HTTP Request POST /api/prepare → webhook audio_prepared
+→ pobierz każdy chunk → Groq /audio/transcriptions → scal tekst
+→ podsumowanie → Telegram → POST /api/jobs/{job_id}/cleanup
+```
+
+W trzech żądaniach serwisu (`/api/prepare`, pobieranie chunków, `/cleanup`) skonfiguruj credential typu Header Auth: `X-Podcast-Token: <N8N_API_TOKEN>`. Klucz Groq pozostaje w istniejącym credentialu n8n.
+
 ## Webhook payload
 
 ```json
 {
+  "event": "audio_prepared",
+  "job_id": 42,
   "feed_name": "Nazwa kanału",
   "rss_feed_title": "Tytuł kanału z RSS",
   "feed_url": "https://.../rss.xml",
@@ -133,8 +161,10 @@ Ustaw ten URL jako **URL webhooka** w Ustawieniach aplikacji. Po każdej transkr
   "audio_url": "https://.../odcinek.mp3",
   "published_at": "2026-06-01T10:00:00+00:00",
   "language": "pl",
-  "transcript": "Pełna transkrypcja...",
-  "duration_seconds": 3600
+  "duration_seconds": 3600,
+  "chunks": [
+    {"index": 0, "file_name": "chunk_000.mp3", "size_bytes": 7200000, "start_seconds": 0, "duration_seconds": 1800}
+  ]
 }
 ```
 
@@ -160,6 +190,8 @@ docker compose logs -f web
 ## Bezpieczeństwo
 
 `worker-controller` wymaga dostępu do Docker socket (`/var/run/docker.sock`) — daje to efektywnie uprawnienia root na hoście. Akceptowalne na prywatnym Raspberry Pi, nie wystawiaj portu 8080 publicznie bez uwierzytelnienia.
+
+Endpointy przygotowania audio wymagają sekretu `N8N_API_TOKEN`; nie ustawiaj go na pustą wartość, gdy korzystasz z `/api/prepare`.
 
 ## Build i push na Docker Hub
 

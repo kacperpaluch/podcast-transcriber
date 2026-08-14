@@ -6,6 +6,8 @@ import logging
 import os
 import subprocess
 import json
+import glob
+import shutil
 import httpx
 import db
 
@@ -26,6 +28,8 @@ PARAKEET_IMAGE = os.environ.get("PARAKEET_IMAGE", "ghcr.io/achetronic/parakeet:l
 PARAKEET_CONTAINER = "podcast-parakeet-active"
 COMPOSE_NETWORK = os.environ.get("COMPOSE_NETWORK", "podcast_default")
 PARAKEET_CHUNK_SECS = 120  # 2 minutes — Parakeet ONNX uses full attention (quadratic RAM)
+EXTERNAL_STT_CHUNK_SECS = int(os.environ.get("EXTERNAL_STT_CHUNK_SECS", "1800"))
+EXTERNAL_STT_AUDIO_BITRATE = os.environ.get("EXTERNAL_STT_AUDIO_BITRATE", "32k")
 
 POLL_INTERVAL = 10          # seconds between queue checks
 WEBHOOK_RETRIES = 5
@@ -131,9 +135,45 @@ def _split_audio(path: str, chunk_secs: int) -> list:
     if r.returncode != 0:
         log.warning("ffmpeg split failed (code %d): %s", r.returncode, r.stderr[-300:])
         return [path]
-    import glob
     chunks = sorted(glob.glob(f"{base}_part_*.wav"))
     return chunks if chunks else [path]
+
+
+def prepare_external_stt_audio(audio_path: str, episode_id: int) -> list:
+    """Create small speech-optimised MP3 chunks for an external STT provider."""
+    duration = _audio_duration(audio_path)
+    output_dir = os.path.join(AUDIO_DIR, f"episode_{episode_id}_external_stt")
+    shutil.rmtree(output_dir, ignore_errors=True)
+    os.makedirs(output_dir, exist_ok=True)
+    pattern = os.path.join(output_dir, "chunk_%03d.mp3")
+    command = [
+        "ffmpeg", "-nostdin", "-y", "-i", audio_path,
+        "-map", "0:a:0", "-vn", "-ar", "16000", "-ac", "1",
+        "-c:a", "libmp3lame", "-b:a", EXTERNAL_STT_AUDIO_BITRATE,
+        "-f", "segment", "-segment_time", str(EXTERNAL_STT_CHUNK_SECS),
+        "-reset_timestamps", "1", pattern,
+    ]
+    log.info("Preparing external-STT audio with %ds chunks at %s", EXTERNAL_STT_CHUNK_SECS, EXTERNAL_STT_AUDIO_BITRATE)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("FFmpeg preparation timed out")
+    if result.returncode != 0:
+        raise RuntimeError(f"FFmpeg preparation failed: {result.stderr[-500:]}")
+    paths = sorted(glob.glob(os.path.join(output_dir, "chunk_*.mp3")))
+    if not paths:
+        raise RuntimeError("FFmpeg did not produce any external-STT chunks")
+    manifest = []
+    for index, chunk_path in enumerate(paths):
+        start_seconds = index * EXTERNAL_STT_CHUNK_SECS
+        manifest.append({
+            "index": index,
+            "file_name": os.path.basename(chunk_path),
+            "size_bytes": os.path.getsize(chunk_path),
+            "start_seconds": start_seconds,
+            "duration_seconds": max(0, min(EXTERNAL_STT_CHUNK_SECS, int(duration) - start_seconds)) if duration else None,
+        })
+    return manifest
 
 
 def _stop_parakeet() -> None:
@@ -281,7 +321,8 @@ def send_webhook(episode_id: int) -> bool:
     with db.db() as conn:
         row = conn.execute(
             """SELECT e.id, e.guid, e.rss_title, e.audio_url, e.published_at,
-                      e.transcript, e.language, e.duration_seconds,
+                      e.transcript, e.language, e.duration_seconds, e.processing_mode,
+                      e.prepared_manifest,
                       COALESCE(f.display_name, e.feed_name) as feed_name,
                       COALESCE(f.url, e.feed_url) as feed_url,
                       COALESCE(f.rss_feed_title, e.rss_feed_title) as rss_feed_title
@@ -302,9 +343,17 @@ def send_webhook(episode_id: int) -> bool:
         "audio_url": row["audio_url"],
         "published_at": row["published_at"],
         "language": row["language"],
-        "transcript": row["transcript"],
         "duration_seconds": row["duration_seconds"],
     }
+    if row["processing_mode"] == "prepare":
+        try:
+            chunks = json.loads(row["prepared_manifest"] or "[]")
+        except json.JSONDecodeError:
+            log.error("Prepared manifest is invalid for episode %d", episode_id)
+            return False
+        payload.update({"event": "audio_prepared", "job_id": episode_id, "chunks": chunks})
+    else:
+        payload.update({"event": "transcription_completed", "transcript": row["transcript"]})
 
     for attempt, delay in enumerate(WEBHOOK_RETRY_DELAYS[:WEBHOOK_RETRIES], 1):
         status_code = None
@@ -344,6 +393,7 @@ def process_episode(episode):
     episode_id = episode["id"]
     audio_url = episode["audio_url"]
     model = get_setting("whisper_model", "large-v3-turbo")
+    processing_mode = episode.get("processing_mode", "transcribe")
     # Language: use episode's own field; fall back to feed language for legacy RSS episodes
     feed_language = episode.get("language")
     if not feed_language and episode.get("feed_id"):
@@ -353,11 +403,12 @@ def process_episode(episode):
 
     log.info("Processing episode %d: %s", episode_id, episode["rss_title"] or guid_short(episode["guid"]))
 
-    # Mark as transcribing — jeśli odcinek zniknął z DB (np. feed usunięty), pomijamy
+    in_progress_status = "preparing" if processing_mode == "prepare" else "transcribing"
+    # Mark as in progress — jeśli odcinek zniknął z DB (np. feed usunięty), pomijamy
     with db.db() as conn:
         affected = conn.execute(
-            "UPDATE episodes SET status='transcribing' WHERE id=? AND status='queued'",
-            (episode_id,),
+            "UPDATE episodes SET status=? WHERE id=? AND status='queued'",
+            (in_progress_status, episode_id),
         ).rowcount
     if affected == 0:
         log.warning("Episode %d no longer exists or not queued — skipping", episode_id)
@@ -367,6 +418,22 @@ def process_episode(episode):
     try:
         # Download audio
         audio_path = download_audio(audio_url, episode_id)
+
+        if processing_mode == "prepare":
+            manifest = prepare_external_stt_audio(audio_path, episode_id)
+            with db.db() as conn:
+                conn.execute(
+                    """UPDATE episodes
+                       SET prepared_manifest=?, status='prepared', duration_seconds=?, transcribed_seconds=0
+                       WHERE id=?""",
+                    (json.dumps(manifest), int(_audio_duration(audio_path)) or None, episode_id),
+                )
+            if not send_webhook(episode_id):
+                raise RuntimeError("Prepared-audio webhook failed after retries")
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+            log.info("External-STT audio prepared for episode %d (%d chunks)", episode_id, len(manifest))
+            return
 
         # Run transcriber (blocks until done)
         if "parakeet" in model.lower():
@@ -436,7 +503,7 @@ def main():
     # Safety: reset any episodes stuck in 'transcribing' from previous crash
     with db.db() as conn:
         stuck = conn.execute(
-            "SELECT id FROM episodes WHERE status='transcribing'"
+            "SELECT id FROM episodes WHERE status IN ('transcribing', 'preparing')"
         ).fetchall()
         for row in stuck:
             log.warning("Resetting stuck episode %d to queued", row["id"])
@@ -454,7 +521,7 @@ def main():
             # Pick exactly ONE queued episode (FIFO)
             with db.db() as conn:
                 episode = conn.execute(
-                    """SELECT id, feed_id, guid, rss_title, audio_url, language
+                    """SELECT id, feed_id, guid, rss_title, audio_url, language, processing_mode
                        FROM episodes WHERE status='queued'
                        ORDER BY created_at ASC, id ASC
                        LIMIT 1"""

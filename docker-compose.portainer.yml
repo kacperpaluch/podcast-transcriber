@@ -21,6 +21,7 @@ services:
       - podcast_data:/data
     environment:
       - DB_PATH=/data/app.db
+      - N8N_API_TOKEN=${N8N_API_TOKEN:-}
     mem_limit: 300m
 
   worker-controller:
@@ -36,6 +37,8 @@ services:
       - HOST_DATA_PATH=${HOST_DATA_PATH}
       - COMPOSE_NETWORK=podcast_default
       - PARAKEET_IMAGE=ghcr.io/achetronic/parakeet:latest
+      - EXTERNAL_STT_CHUNK_SECS=1800
+      - EXTERNAL_STT_AUDIO_BITRATE=32k
     mem_limit: 200m
 
 volumes:

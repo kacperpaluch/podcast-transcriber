@@ -1,6 +1,6 @@
 # Podcast Transcriber
 
-Lokalny serwis transkrypcji podcastów dla Raspberry Pi 4/5 (8 GB RAM). Przyjmuje URL pliku audio przez REST API, transkrybuje lokalnie (faster-whisper lub Parakeet NVIDIA) i wysyła wyniki webhookiem do n8n. Monitorowanie RSS i orkiestracja po stronie n8n.
+Lokalny serwis przygotowania i transkrypcji podcastów dla Raspberry Pi 4/5 (8 GB RAM). Pobiera audio po URL, transkrybuje lokalnie (faster-whisper lub Parakeet NVIDIA) albo przygotowuje małe MP3 dla Groq STT w n8n. Monitorowanie RSS, podsumowania i orkiestracja pozostają po stronie n8n.
 
 ## Kontenery
 
@@ -26,6 +26,7 @@ services:
       - podcast_data:/data
     environment:
       - DB_PATH=/data/app.db
+      - N8N_API_TOKEN=${N8N_API_TOKEN:-}
     mem_limit: 300m
 
   worker-controller:
@@ -41,6 +42,8 @@ services:
       - HOST_DATA_PATH=${HOST_DATA_PATH}
       - COMPOSE_NETWORK=podcast_default
       - PARAKEET_IMAGE=ghcr.io/achetronic/parakeet:latest
+      - EXTERNAL_STT_CHUNK_SECS=1800
+      - EXTERNAL_STT_AUDIO_BITRATE=32k
     mem_limit: 200m
 
 volumes:
@@ -66,7 +69,11 @@ Odpowiedź: `202 Accepted {"job_id": 42}`
 
 ### GET /api/jobs/{job_id}
 
-Zwraca status: `queued`, `transcribing`, `done`, `error` + `progress_pct`.
+Zwraca status: `queued`, `preparing`, `prepared`, `transcribing`, `done`, `error` + `progress_pct`.
+
+### POST /api/prepare
+
+Kolejkuje przygotowanie plików MP3 dla Groq STT w n8n. Wymaga nagłówka `X-Podcast-Token`, zgodnego z `N8N_API_TOKEN`. Worker koduje audio do mono MP3 16 kHz / 32 kbps i dzieli je domyślnie na części po 30 minut; następnie webhook do n8n zawiera manifest chunków.
 
 ## Zmienne środowiskowe
 
@@ -77,8 +84,11 @@ Zwraca status: `queued`, `transcribing`, `done`, `error` + `progress_pct`.
 | `HOST_DATA_PATH` | worker | Ścieżka do `/data` na hoście (wymagana do montowania wolumenów) |
 | `COMPOSE_NETWORK` | worker | Sieć Docker Compose (domyślnie `podcast_default`) |
 | `PARAKEET_IMAGE` | worker | Obraz Parakeet (opcjonalnie, dla modelu parakeet-tdt-0.6b-v3) |
+| `N8N_API_TOKEN` | web | Sekret nagłówka `X-Podcast-Token` dla endpointów przygotowania i cleanupu |
+| `EXTERNAL_STT_CHUNK_SECS` | worker | Maksymalny czas chunka, domyślnie `1800` s |
+| `EXTERNAL_STT_AUDIO_BITRATE` | worker | Bitrate przygotowanego MP3, domyślnie `32k` |
 
 ## Więcej informacji
 
 Pełna dokumentacja, instrukcja integracji z n8n i opis modeli Whisper/Parakeet:
-[codeberg.org/kp90/podcast-transcriber](https://codeberg.org/kp90/podcast-transcriber)
+[github.com/kacperpaluch/podcast-transcriber](https://github.com/kacperpaluch/podcast-transcriber)

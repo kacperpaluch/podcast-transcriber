@@ -52,7 +52,9 @@ def init_db():
                 audio_url TEXT NOT NULL,
                 published_at TEXT,
                 status TEXT NOT NULL DEFAULT 'queued',
+                processing_mode TEXT NOT NULL DEFAULT 'transcribe',
                 transcript TEXT,
+                prepared_manifest TEXT,
                 language TEXT,
                 duration_seconds INTEGER,
                 transcribed_seconds INTEGER,
@@ -101,7 +103,9 @@ def init_db():
                     audio_url TEXT NOT NULL,
                     published_at TEXT,
                     status TEXT NOT NULL DEFAULT 'queued',
+                    processing_mode TEXT NOT NULL DEFAULT 'transcribe',
                     transcript TEXT,
+                    prepared_manifest TEXT,
                     language TEXT,
                     duration_seconds INTEGER,
                     transcribed_seconds INTEGER,
@@ -123,9 +127,15 @@ def init_db():
                 PRAGMA foreign_keys=ON;
             """)
         else:
-            for col in ("feed_name", "feed_url", "rss_feed_title"):
+            for col, definition in (
+                ("feed_name", "TEXT"),
+                ("feed_url", "TEXT"),
+                ("rss_feed_title", "TEXT"),
+                ("processing_mode", "TEXT NOT NULL DEFAULT 'transcribe'"),
+                ("prepared_manifest", "TEXT"),
+            ):
                 if col not in ep_cols:
                     try:
-                        conn.execute(f"ALTER TABLE episodes ADD COLUMN {col} TEXT")
+                        conn.execute(f"ALTER TABLE episodes ADD COLUMN {col} {definition}")
                     except Exception:
                         pass

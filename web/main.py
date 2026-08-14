@@ -1,10 +1,13 @@
 import sys
 import os
 import uuid
+import json
+import secrets
+import shutil
 sys.path.insert(0, "/app/shared")
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import Optional
@@ -33,6 +36,36 @@ class TranscribeRequest(BaseModel):
     duration_seconds: Optional[int] = None
 
 
+def verify_n8n_token(x_podcast_token: Optional[str] = Header(default=None)):
+    """Authorize n8n-only preparation, file transfer and cleanup endpoints."""
+    expected = os.environ.get("N8N_API_TOKEN", "")
+    if not expected or not x_podcast_token or not secrets.compare_digest(x_podcast_token, expected):
+        raise HTTPException(401, "Invalid or missing X-Podcast-Token")
+
+
+def _queue_request(req: TranscribeRequest, processing_mode: str):
+    if not req.audio_url or not req.audio_url.strip():
+        raise HTTPException(400, "audio_url is required")
+    guid = req.guid or str(uuid.uuid4())
+    with db.db() as conn:
+        try:
+            conn.execute(
+                """INSERT INTO episodes(feed_id, guid, rss_title, audio_url, published_at,
+                       duration_seconds, language, feed_name, feed_url, rss_feed_title,
+                       processing_mode)
+                   VALUES(NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (guid, req.episode_title, req.audio_url.strip(), req.published_at,
+                 req.duration_seconds, req.language, req.feed_name, req.feed_url,
+                 req.rss_feed_title, processing_mode),
+            )
+            job_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+        except Exception as e:
+            if "UNIQUE" in str(e):
+                raise HTTPException(409, f"Episode with guid '{guid}' already exists")
+            raise HTTPException(500, str(e))
+    return {"job_id": job_id, "processing_mode": processing_mode}
+
+
 class SettingsUpdate(BaseModel):
     whisper_model: Optional[str] = None
     webhook_url: Optional[str] = None
@@ -49,32 +82,22 @@ async def index(request: Request):
 
 @app.post("/api/transcribe", status_code=202)
 def queue_transcription(req: TranscribeRequest):
-    if not req.audio_url or not req.audio_url.strip():
-        raise HTTPException(400, "audio_url is required")
-    guid = req.guid or str(uuid.uuid4())
-    with db.db() as conn:
-        try:
-            conn.execute(
-                """INSERT INTO episodes(feed_id, guid, rss_title, audio_url, published_at,
-                       duration_seconds, language, feed_name, feed_url, rss_feed_title)
-                   VALUES(NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (guid, req.episode_title, req.audio_url.strip(), req.published_at,
-                 req.duration_seconds, req.language, req.feed_name, req.feed_url,
-                 req.rss_feed_title),
-            )
-            job_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
-        except Exception as e:
-            if "UNIQUE" in str(e):
-                raise HTTPException(409, f"Episode with guid '{guid}' already exists")
-            raise HTTPException(500, str(e))
-    return {"job_id": job_id}
+    return _queue_request(req, "transcribe")
+
+
+@app.post("/api/prepare", status_code=202)
+def queue_preparation(req: TranscribeRequest, x_podcast_token: Optional[str] = Header(default=None)):
+    verify_n8n_token(x_podcast_token)
+    return _queue_request(req, "prepare")
 
 
 @app.get("/api/jobs/{job_id}")
 def get_job_status(job_id: int):
     with db.db() as conn:
         row = conn.execute(
-            "SELECT id, status, rss_title, error, duration_seconds, transcribed_seconds FROM episodes WHERE id=?",
+            """SELECT id, status, processing_mode, rss_title, error, duration_seconds,
+                      transcribed_seconds, prepared_manifest
+               FROM episodes WHERE id=?""",
             (job_id,),
         ).fetchone()
     if not row:
@@ -83,7 +106,53 @@ def get_job_status(job_id: int):
     dur = d.get("duration_seconds") or 0
     done = d.get("transcribed_seconds") or 0
     d["progress_pct"] = min(99, int(done / dur * 100)) if dur > 0 else None
+    if d.get("prepared_manifest"):
+        d["chunks"] = json.loads(d.pop("prepared_manifest"))
+    else:
+        d.pop("prepared_manifest", None)
     return d
+
+
+@app.get("/api/jobs/{job_id}/chunks/{chunk_index}")
+def get_prepared_chunk(job_id: int, chunk_index: int, x_podcast_token: Optional[str] = Header(default=None)):
+    """Serve one prepared chunk to n8n without exposing host filesystem paths."""
+    verify_n8n_token(x_podcast_token)
+    with db.db() as conn:
+        row = conn.execute(
+            "SELECT processing_mode, prepared_manifest FROM episodes WHERE id=?", (job_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Job not found")
+    if row["processing_mode"] != "prepare" or not row["prepared_manifest"]:
+        raise HTTPException(409, "Audio is not prepared for external transcription")
+    try:
+        manifest = json.loads(row["prepared_manifest"])
+        chunk = next(item for item in manifest if item["index"] == chunk_index)
+    except (json.JSONDecodeError, StopIteration, KeyError):
+        raise HTTPException(404, "Chunk not found")
+    base_dir = os.path.realpath(f"/data/audio/episode_{job_id}_external_stt")
+    path = os.path.realpath(os.path.join(base_dir, chunk["file_name"]))
+    if os.path.dirname(path) != base_dir or not os.path.isfile(path):
+        raise HTTPException(404, "Prepared chunk file is unavailable")
+    return FileResponse(path, media_type="audio/mpeg", filename=chunk["file_name"])
+
+
+@app.post("/api/jobs/{job_id}/cleanup")
+def cleanup_prepared_job(job_id: int, x_podcast_token: Optional[str] = Header(default=None)):
+    """Remove prepared audio after n8n completed transcription and summary."""
+    verify_n8n_token(x_podcast_token)
+    with db.db() as conn:
+        row = conn.execute("SELECT processing_mode FROM episodes WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Job not found")
+        if row["processing_mode"] != "prepare":
+            raise HTTPException(409, "Cleanup is only available for prepared jobs")
+        shutil.rmtree(f"/data/audio/episode_{job_id}_external_stt", ignore_errors=True)
+        conn.execute(
+            "UPDATE episodes SET status='done', prepared_manifest=NULL, error=NULL WHERE id=?",
+            (job_id,),
+        )
+    return {"ok": True}
 
 
 # ── Settings API ──────────────────────────────────────────────────────────────
