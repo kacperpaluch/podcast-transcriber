@@ -80,7 +80,7 @@ Zwraca status transkrypcji lub przygotowania audio: `queued`, `preparing`, `prep
 
 Kolejkuje pobranie i przygotowanie audio do zewnętrznego STT. Endpoint jest przeznaczony do użycia wyłącznie w prywatnej sieci domowej.
 
-Żądanie ma ten sam format co `/api/transcribe`. Worker pobiera audio bezpośrednio z URL, koduje je do MP3 mono 16 kHz / 32 kbps i dzieli domyślnie na części po 30 minut. Po przygotowaniu wysyła skonfigurowany webhook do n8n z `event: "audio_prepared"`, `job_id` i manifestem chunków.
+Żądanie ma ten sam format co `/api/transcribe`. Worker pobiera audio bezpośrednio z URL, koduje je do MP3 mono 16 kHz / 32 kbps i dzieli domyślnie na części po 60 minut (około 14–15 MB na godzinę, poniżej limitu 25 MB). Po przygotowaniu wysyła skonfigurowany webhook do n8n z `event: "audio_prepared"`, `job_id` i manifestem chunków.
 
 ### GET /api/jobs/{job_id}/chunks/{chunk_index}
 
@@ -169,7 +169,7 @@ Trzy żądania serwisu (`/api/prepare`, pobieranie chunków, `/cleanup`) nie wym
   "language": "pl",
   "duration_seconds": 3600,
   "chunks": [
-    {"index": 0, "file_name": "chunk_000.mp3", "size_bytes": 7200000, "start_seconds": 0, "duration_seconds": 1800}
+    {"index": 0, "file_name": "chunk_000.mp3", "size_bytes": 14400000, "start_seconds": 0, "duration_seconds": 3600}
   ]
 }
 ```

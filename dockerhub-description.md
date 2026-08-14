@@ -41,7 +41,7 @@ services:
       - HOST_DATA_PATH=${HOST_DATA_PATH}
       - COMPOSE_NETWORK=podcast_default
       - PARAKEET_IMAGE=ghcr.io/achetronic/parakeet:latest
-      - EXTERNAL_STT_CHUNK_SECS=1800
+      - EXTERNAL_STT_CHUNK_SECS=3600
       - EXTERNAL_STT_AUDIO_BITRATE=32k
     mem_limit: 200m
 
@@ -72,7 +72,7 @@ Zwraca status: `queued`, `preparing`, `prepared`, `transcribing`, `done`, `error
 
 ### POST /api/prepare
 
-Kolejkuje przygotowanie plików MP3 dla Groq STT w n8n. Przeznaczony do użycia wyłącznie w prywatnej sieci domowej. Worker koduje audio do mono MP3 16 kHz / 32 kbps i dzieli je domyślnie na części po 30 minut; następnie webhook do n8n zawiera manifest chunków.
+Kolejkuje przygotowanie plików MP3 dla Groq STT w n8n. Przeznaczony do użycia wyłącznie w prywatnej sieci domowej. Worker koduje audio do mono MP3 16 kHz / 32 kbps i dzieli je domyślnie na części po 60 minut (około 14–15 MB na godzinę); następnie webhook do n8n zawiera manifest chunków.
 
 ## Zmienne środowiskowe
 
@@ -83,7 +83,7 @@ Kolejkuje przygotowanie plików MP3 dla Groq STT w n8n. Przeznaczony do użycia 
 | `HOST_DATA_PATH` | worker | Ścieżka do `/data` na hoście (wymagana do montowania wolumenów) |
 | `COMPOSE_NETWORK` | worker | Sieć Docker Compose (domyślnie `podcast_default`) |
 | `PARAKEET_IMAGE` | worker | Obraz Parakeet (opcjonalnie, dla modelu parakeet-tdt-0.6b-v3) |
-| `EXTERNAL_STT_CHUNK_SECS` | worker | Maksymalny czas chunka, domyślnie `1800` s |
+| `EXTERNAL_STT_CHUNK_SECS` | worker | Maksymalny czas chunka, domyślnie `3600` s |
 | `EXTERNAL_STT_AUDIO_BITRATE` | worker | Bitrate przygotowanego MP3, domyślnie `32k` |
 
 Panel **Odcinki** pozwala trwale usunąć ukończony lub błędny odcinek, aby ten sam GUID można było przetworzyć ponownie przez n8n.

@@ -28,7 +28,7 @@ PARAKEET_IMAGE = os.environ.get("PARAKEET_IMAGE", "ghcr.io/achetronic/parakeet:l
 PARAKEET_CONTAINER = "podcast-parakeet-active"
 COMPOSE_NETWORK = os.environ.get("COMPOSE_NETWORK", "podcast_default")
 PARAKEET_CHUNK_SECS = 120  # 2 minutes — Parakeet ONNX uses full attention (quadratic RAM)
-EXTERNAL_STT_CHUNK_SECS = int(os.environ.get("EXTERNAL_STT_CHUNK_SECS", "1800"))
+EXTERNAL_STT_CHUNK_SECS = int(os.environ.get("EXTERNAL_STT_CHUNK_SECS", "3600"))
 EXTERNAL_STT_AUDIO_BITRATE = os.environ.get("EXTERNAL_STT_AUDIO_BITRATE", "32k")
 
 POLL_INTERVAL = 10          # seconds between queue checks
