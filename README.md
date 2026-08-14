@@ -94,17 +94,16 @@ Usuwa przygotowane pliki po pomyślnej transkrypcji i podsumowaniu w n8n.
 
 Trwale usuwa zakończony lub błędny odcinek oraz jego pliki robocze. Dzięki temu ten sam GUID można ponownie uruchomić z RSS przez nową ścieżkę Groq. Endpoint nie pozwala usuwać zadań `queued`, `preparing`, `prepared` ani `transcribing`.
 
-W panelu **Odcinki** odpowiada mu przycisk **Usuń** z potwierdzeniem. Przycisk **Transkrybuj ponownie** zachowuje istniejący tryb zadania; aby przełączyć historyczny odcinek na nową ścieżkę, najpierw wybierz **Usuń**, a następnie uruchom go ponownie w n8n.
+W tabeli odcinków na **Panelu głównym** odpowiada mu przycisk **Usuń** z potwierdzeniem. Przycisk **Usuń całą historię** usuwa tylko odcinki zakończone, błędne i pominięte — aktywne zadania pozostają nienaruszone. Przycisk **Transkrybuj ponownie** zachowuje istniejący tryb zadania; aby przełączyć historyczny odcinek na nową ścieżkę, najpierw wybierz **Usuń**, a następnie uruchom go ponownie w n8n.
 
 ## Konfiguracja
 
 Przez interfejs webowy:
 
 1. **Ustawienia** → model transkrypcji, URL webhooka n8n
-2. **Dodaj transkrypcję** → ręczne kolejkowanie (przydatne do testów bez n8n)
-3. **Odcinki** → kolejka, statusy, podgląd transkrypcji
-4. **Panel główny** → statystyki, aktywna transkrypcja z paskiem postępu
-5. **Historia webhooków** → log wysłanych webhooków z możliwością ponownego wysłania
+2. **Dodaj transkrypcję** → wybór: lokalna transkrypcja albo **FFmpeg → chunki → webhook n8n/Groq** (zalecany)
+3. **Panel główny** → statystyki, aktywna transkrypcja, pełna lista odcinków sortowana chronologicznie, filtrowanie i bezpieczne czyszczenie historii
+4. **Historia webhooków** → log wysłanych webhooków z możliwością ponownego wysłania
 
 ### Modele Whisper
 

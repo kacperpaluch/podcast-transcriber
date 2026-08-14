@@ -3,6 +3,8 @@ import os
 import uuid
 import json
 import shutil
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 sys.path.insert(0, "/app/shared")
 
 from fastapi import FastAPI, HTTPException, Request
@@ -16,9 +18,43 @@ import db
 app = FastAPI(title="Podcast Transcriber")
 templates = Jinja2Templates(directory="/app/templates")
 
+
+def normalize_published_at(value: Optional[str]) -> Optional[str]:
+    """Store RSS and manual dates in one sortable UTC representation."""
+    if not value or not value.strip():
+        return None
+    raw = value.strip()
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError, IndexError):
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return raw
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def normalize_existing_episode_dates() -> None:
+    """Migrate legacy RSS date strings so SQL can sort them chronologically."""
+    with db.db() as conn:
+        rows = conn.execute(
+            "SELECT id, published_at FROM episodes WHERE published_at IS NOT NULL"
+        ).fetchall()
+        for row in rows:
+            normalized = normalize_published_at(row["published_at"])
+            if normalized and normalized != row["published_at"]:
+                conn.execute(
+                    "UPDATE episodes SET published_at=? WHERE id=?",
+                    (normalized, row["id"]),
+                )
+
+
 os.makedirs("/data/audio", exist_ok=True)
 os.makedirs("/data/models", exist_ok=True)
 db.init_db()
+normalize_existing_episode_dates()
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -46,7 +82,7 @@ def _queue_request(req: TranscribeRequest, processing_mode: str):
                        duration_seconds, language, feed_name, feed_url, rss_feed_title,
                        processing_mode)
                    VALUES(NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (guid, req.episode_title, req.audio_url.strip(), req.published_at,
+                (guid, req.episode_title, req.audio_url.strip(), normalize_published_at(req.published_at),
                  req.duration_seconds, req.language, req.feed_name, req.feed_url,
                  req.rss_feed_title, processing_mode),
             )
@@ -188,7 +224,7 @@ def list_episodes(status: Optional[str] = None, limit: int = 50, offset: int = 0
     if status is not None:
         query += " AND e.status=?"
         params.append(status)
-    query += " ORDER BY COALESCE(e.published_at, e.created_at) DESC, e.id DESC LIMIT ? OFFSET ?"
+    query += " ORDER BY julianday(COALESCE(e.published_at, e.created_at)) DESC, e.id DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
     with db.db() as conn:
         rows = conn.execute(query, params).fetchall()
@@ -299,6 +335,22 @@ def retry_episode(episode_id: int):
             (episode_id,),
         )
     return {"ok": True}
+
+
+@app.delete("/api/episodes/finished")
+def delete_finished_episodes():
+    """Clear finished history without ever interrupting active work."""
+    finished_statuses = ("done", "error", "skipped")
+    with db.db() as conn:
+        rows = conn.execute(
+            "SELECT id FROM episodes WHERE status IN (?, ?, ?)", finished_statuses
+        ).fetchall()
+        episode_ids = [row["id"] for row in rows]
+        conn.execute("DELETE FROM episodes WHERE status IN (?, ?, ?)", finished_statuses)
+
+    for episode_id in episode_ids:
+        shutil.rmtree(f"/data/audio/episode_{episode_id}_external_stt", ignore_errors=True)
+    return {"ok": True, "deleted_count": len(episode_ids)}
 
 
 @app.delete("/api/episodes/{episode_id}")

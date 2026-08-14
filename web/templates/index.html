@@ -70,7 +70,6 @@
     <div class="logo">🎙 Podcast<br>Transcriber</div>
     <a class="active" data-section="dashboard" onclick="showSection('dashboard', this)">Panel główny</a>
     <a data-section="add" onclick="showSection('add', this)">Dodaj transkrypcję</a>
-    <a data-section="episodes" onclick="showSection('episodes', this)">Odcinki</a>
     <a data-section="history" onclick="showSection('history', this)">Historia webhooków</a>
     <a data-section="settings" onclick="showSection('settings', this)">Ustawienia</a>
   </nav>
@@ -99,7 +98,23 @@
         <div class="progress-bar"><div class="progress-fill" id="active-progress-fill" style="width:0%"></div></div>
       </div>
       <div class="card">
-        <h2>Ostatnie odcinki</h2>
+        <h2>Odcinki</h2>
+        <div class="form-row" style="margin-bottom:16px;gap:12px;align-items:flex-end">
+          <div class="form-group" style="min-width:160px;max-width:220px">
+            <label>Status</label>
+            <select id="dashboard-filter-status" onchange="dashboardFilterChanged()">
+              <option value="">Wszystkie</option>
+              <option value="queued">W kolejce</option>
+              <option value="preparing">Przygotowywanie audio</option>
+              <option value="prepared">Gotowe do Groq</option>
+              <option value="transcribing">Transkrybowanie lokalne</option>
+              <option value="done">Gotowe</option>
+              <option value="error">Błąd</option>
+              <option value="skipped">Pominięte</option>
+            </select>
+          </div>
+          <button class="btn-danger btn-sm" onclick="deleteFinishedEpisodes()">Usuń całą historię</button>
+        </div>
         <div id="recent-episodes"></div>
         <div id="recent-pagination"></div>
       </div>
@@ -110,13 +125,20 @@
       <h1>Dodaj transkrypcję</h1>
       <div class="card">
         <h2>Kolejka nowej transkrypcji</h2>
-        <p style="font-size:13px;color:#94a3b8;margin-bottom:20px">Wklej URL pliku audio — transkrypcja zostanie dodana do kolejki i przetworzona sekwencyjnie. Wyniki trafią webhookiem do n8n.</p>
+        <p style="font-size:13px;color:#94a3b8;margin-bottom:20px">Wklej URL pliku audio i wybierz tryb. Zalecany tryb przygotowuje MP3 przez FFmpeg, dzieli je na części i wysyła manifest do ustawionego webhooka n8n.</p>
         <div id="add-alert"></div>
         <div class="form-group" style="margin-bottom:16px">
           <label>URL pliku audio *</label>
           <input id="add-url" type="url" placeholder="https://example.com/podcast.mp3">
         </div>
         <div class="form-row">
+          <div class="form-group" style="min-width:240px">
+            <label>Tryb przetwarzania</label>
+            <select id="add-mode">
+              <option value="prepare">FFmpeg → chunki → n8n / Groq (zalecany)</option>
+              <option value="transcribe">Lokalna transkrypcja na Raspberry Pi</option>
+            </select>
+          </div>
           <div class="form-group" style="min-width:120px;max-width:160px">
             <label>Język</label>
             <select id="add-language">
@@ -142,8 +164,8 @@
       </div>
       <div class="card" style="border-color:#1e3a5f">
         <h2 style="color:#93c5fd">Integracja z n8n</h2>
-        <p style="font-size:13px;color:#94a3b8;margin-bottom:12px">n8n może automatycznie kolejkować transkrypcje przez API:</p>
-        <pre style="background:#0f172a;padding:16px;border-radius:6px;font-size:12px;color:#94a3b8;overflow-x:auto">POST /api/transcribe
+        <p style="font-size:13px;color:#94a3b8;margin-bottom:12px">Dla Groq/n8n użyj <code>POST /api/prepare</code>; dla starej lokalnej ścieżki — <code>POST /api/transcribe</code>.</p>
+        <pre style="background:#0f172a;padding:16px;border-radius:6px;font-size:12px;color:#94a3b8;overflow-x:auto">POST /api/prepare
 {
   "audio_url": "https://...",
   "language": "pl",
@@ -152,29 +174,6 @@
   "guid": "opcjonalny-unikalny-id"
 }
 → 202 Accepted  {"job_id": 42}</pre>
-      </div>
-    </div>
-
-    <!-- EPISODES -->
-    <div id="section-episodes" class="section">
-      <h1>Odcinki</h1>
-      <div class="card" style="padding:16px 24px">
-        <div class="form-row" style="margin:0;gap:12px;align-items:flex-end">
-          <div class="form-group" style="min-width:140px;max-width:200px">
-            <label>Status</label>
-            <select id="filter-status" onchange="loadEpisodes()">
-              <option value="">Wszystkie</option>
-              <option value="queued">W kolejce</option>
-              <option value="transcribing">Transkrybowanie</option>
-              <option value="done">Gotowe</option>
-              <option value="error">Błąd</option>
-              <option value="skipped">Pominięte (archiwalne)</option>
-            </select>
-          </div>
-        </div>
-      </div>
-      <div class="card">
-        <div id="episodes-table"></div>
       </div>
     </div>
 
@@ -244,7 +243,6 @@ function showSection(name, el) {
   $('section-' + name).classList.add('active');
   el.classList.add('active');
   if (name === 'dashboard') loadDashboard();
-  if (name === 'episodes') loadEpisodes();
   if (name === 'history') loadHistory();
   if (name === 'settings') loadSettings();
 }
@@ -282,34 +280,38 @@ function fmtDate(s) {
 let progressTimer = null;
 let dashPage = 0;
 let dashTotal = 0;
+let dashStats = {};
 const DASH_PAGE_SIZE = 30;
 
 async function loadDashboard() {
   try {
     const stats = await api('GET', '/api/stats');
     const ep = stats.episodes || {};
+    dashStats = ep;
     $('stat-queued').textContent = ep.queued ?? 0;
     $('stat-transcribing').textContent = ep.transcribing ?? 0;
     $('stat-done').textContent = ep.done ?? 0;
     $('stat-error').textContent = ep.error ?? 0;
-    dashTotal = Object.values(ep).reduce((a, b) => a + b, 0);
   } catch {}
   await loadRecentEpisodes();
   refreshActiveTranscription();
 }
 
 async function loadRecentEpisodes() {
+  const status = $('dashboard-filter-status').value;
+  dashTotal = status ? (dashStats[status] || 0) : Object.values(dashStats).reduce((a, b) => a + b, 0);
   const maxPage = Math.max(0, Math.ceil(dashTotal / DASH_PAGE_SIZE) - 1);
   if (dashPage > maxPage) dashPage = maxPage;
   try {
     const offset = dashPage * DASH_PAGE_SIZE;
-    const episodes = await api('GET', `/api/episodes?limit=${DASH_PAGE_SIZE}&offset=${offset}`);
+    const filter = status ? `&status=${encodeURIComponent(status)}` : '';
+    const episodes = await api('GET', `/api/episodes?limit=${DASH_PAGE_SIZE}&offset=${offset}${filter}`);
     if (!episodes.length) {
       $('recent-episodes').innerHTML = '<div class="empty-state">Brak odcinków</div>';
       $('recent-pagination').innerHTML = '';
       return;
     }
-    $('recent-episodes').innerHTML = buildEpisodesTable(episodes, false);
+    $('recent-episodes').innerHTML = buildEpisodesTable(episodes, true);
     $('recent-pagination').innerHTML = dashTotal > DASH_PAGE_SIZE ? `
       <div class="pagination">
         <button class="btn-ghost btn-sm" ${dashPage <= 0 ? 'disabled' : ''} onclick="dashGoto(${dashPage - 1})">‹ Poprzednia</button>
@@ -321,6 +323,11 @@ async function loadRecentEpisodes() {
 
 function dashGoto(p) {
   dashPage = Math.max(0, p);
+  loadRecentEpisodes();
+}
+
+function dashboardFilterChanged() {
+  dashPage = 0;
   loadRecentEpisodes();
 }
 
@@ -364,13 +371,14 @@ async function refreshActiveTranscription() {
 // Add transcription
 async function queueTranscription() {
   const url = $('add-url').value.trim();
+  const mode = $('add-mode').value;
   $('add-alert').innerHTML = '';
   if (!url) {
     $('add-alert').innerHTML = '<div class="alert alert-error">URL pliku audio jest wymagany</div>';
     return;
   }
   try {
-    const data = await api('POST', '/api/transcribe', {
+    const data = await api('POST', mode === 'prepare' ? '/api/prepare' : '/api/transcribe', {
       audio_url: url,
       language: $('add-language').value || null,
       episode_title: $('add-title').value.trim() || null,
@@ -379,26 +387,12 @@ async function queueTranscription() {
     $('add-url').value = '';
     $('add-title').value = '';
     $('add-feed-name').value = '';
-    $('add-alert').innerHTML = `<div class="alert alert-success">Dodano do kolejki (ID: ${data.job_id})</div>`;
+    const message = mode === 'prepare'
+      ? 'Dodano do kolejki FFmpeg → chunki → n8n'
+      : 'Dodano do kolejki lokalnej transkrypcji';
+    $('add-alert').innerHTML = `<div class="alert alert-success">${message} (ID: ${data.job_id})</div>`;
   } catch(e) {
     $('add-alert').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
-  }
-}
-
-// Episodes
-async function loadEpisodes() {
-  try {
-    const status = $('filter-status').value;
-    let url = '/api/episodes?limit=100';
-    if (status) url += `&status=${status}`;
-    const episodes = await api('GET', url);
-    if (!episodes.length) {
-      $('episodes-table').innerHTML = '<div class="empty-state">Brak odcinków dla wybranych filtrów</div>';
-      return;
-    }
-    $('episodes-table').innerHTML = buildEpisodesTable(episodes, true);
-  } catch(e) {
-    $('episodes-table').innerHTML = `<div class="alert alert-error">${esc(e.message)}</div>`;
   }
 }
 
@@ -449,7 +443,7 @@ function closeModal(e) {
 async function retryEpisode(id) {
   try {
     await api('POST', `/api/episodes/${id}/retry`);
-    loadEpisodes();
+    loadDashboard();
   } catch(e) { alert(e.message); }
 }
 
@@ -457,7 +451,16 @@ async function deleteEpisode(id) {
   if (!confirm('Trwale usunąć ten odcinek?\n\nPo usunięciu można go pobrać i przetworzyć ponownie przez n8n.')) return;
   try {
     await api('DELETE', `/api/episodes/${id}`);
-    loadEpisodes();
+    loadDashboard();
+  } catch(e) { alert(e.message); }
+}
+
+async function deleteFinishedEpisodes() {
+  if (!confirm('Usunąć całą historię zakończonych, błędnych i pominiętych odcinków?\n\nAktywne zadania pozostaną nienaruszone.')) return;
+  try {
+    const result = await api('DELETE', '/api/episodes/finished');
+    alert(`Usunięto ${result.deleted_count} odcinków.`);
+    loadDashboard();
   } catch(e) { alert(e.message); }
 }
 
