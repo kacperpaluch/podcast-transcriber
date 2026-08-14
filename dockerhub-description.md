@@ -1,6 +1,6 @@
 # Podcast Transcriber
 
-Lokalny serwis przygotowania i transkrypcji podcastów dla Raspberry Pi 4/5 (8 GB RAM). Pobiera audio po URL, transkrybuje lokalnie (faster-whisper lub Parakeet NVIDIA) albo przygotowuje małe MP3 dla Groq STT w n8n. Monitorowanie RSS, podsumowania i orkiestracja pozostają po stronie n8n.
+Lokalny serwis przygotowania i transkrypcji podcastów dla Raspberry Pi 4/5 (8 GB RAM). Pobiera audio po URL, transkrybuje lokalnie (faster-whisper lub Parakeet NVIDIA) albo przygotowuje małe MP3 dla zewnętrznego STT w n8n. Monitorowanie RSS, podsumowania i orkiestracja pozostają po stronie n8n.
 
 ## Kontenery
 
@@ -72,7 +72,7 @@ Zwraca status: `queued`, `preparing`, `prepared`, `transcribing`, `done`, `error
 
 ### POST /api/prepare
 
-Kolejkuje przygotowanie plików MP3 dla Groq STT w n8n. Przeznaczony do użycia wyłącznie w prywatnej sieci domowej. Worker koduje audio do mono MP3 16 kHz / 32 kbps i dzieli je domyślnie na części po 60 minut (około 14–15 MB na godzinę); następnie webhook do n8n zawiera manifest chunków.
+Kolejkuje przygotowanie plików MP3 dla zewnętrznego STT w n8n. Przeznaczony do użycia wyłącznie w prywatnej sieci domowej. Worker koduje audio do mono MP3 16 kHz / 32 kbps i dzieli je domyślnie na części po 60 minut (około 14–15 MB na godzinę); następnie webhook do n8n zawiera manifest chunków.
 
 ## Zmienne środowiskowe
 
@@ -86,9 +86,9 @@ Kolejkuje przygotowanie plików MP3 dla Groq STT w n8n. Przeznaczony do użycia 
 | `EXTERNAL_STT_CHUNK_SECS` | worker | Maksymalny czas chunka, domyślnie `3600` s |
 | `EXTERNAL_STT_AUDIO_BITRATE` | worker | Bitrate przygotowanego MP3, domyślnie `32k` |
 
-Tabela odcinków na **Panelu głównym** pozwala trwale usunąć ukończony lub błędny odcinek, aby ten sam GUID można było przetworzyć ponownie przez n8n.
+Tabela odcinków na **Panelu głównym** pozwala trwale usunąć ukończony, błędny lub przygotowany do zewnętrznego STT odcinek wraz z chunkami, aby ten sam GUID można było przetworzyć ponownie przez n8n.
 
-W panelu **Dodaj transkrypcję** można wybrać lokalną transkrypcję albo przygotowanie **FFmpeg → chunki → webhook n8n/Groq**. Pełna lista odcinków jest częścią Panelu głównego, sortowaną chronologicznie od najnowszych; umożliwia filtrowanie oraz bezpieczne wyczyszczenie historii bez aktywnych zadań.
+W panelu **Dodaj transkrypcję** można wybrać lokalną transkrypcję albo przygotowanie **FFmpeg → chunki → webhook n8n/zewnętrzny STT**. Pełna lista odcinków jest częścią Panelu głównego, sortowaną chronologicznie od najnowszych; umożliwia filtrowanie oraz bezpieczne wyczyszczenie historii bez aktywnych zadań.
 
 ## Więcej informacji
 

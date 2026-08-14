@@ -355,14 +355,17 @@ def delete_finished_episodes():
 
 @app.delete("/api/episodes/{episode_id}")
 def delete_episode(episode_id: int):
-    """Permanently remove a finished episode so its RSS GUID can be processed again."""
+    """Remove a non-running episode so its RSS GUID can be processed again."""
     with db.db() as conn:
         row = conn.execute(
             "SELECT status FROM episodes WHERE id=?", (episode_id,)
         ).fetchone()
         if not row:
             raise HTTPException(404, "Episode not found")
-        if row["status"] in ("queued", "preparing", "prepared", "transcribing"):
+        # `prepared` means the local worker has finished. The user may explicitly
+        # discard its pending external-STT job and its chunks before sending the
+        # same RSS episode through n8n again.
+        if row["status"] in ("queued", "preparing", "transcribing"):
             raise HTTPException(409, "Nie można usunąć odcinka, który jest w toku")
         conn.execute("DELETE FROM episodes WHERE id=?", (episode_id,))
 

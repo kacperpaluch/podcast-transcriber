@@ -106,7 +106,7 @@
               <option value="">Wszystkie</option>
               <option value="queued">W kolejce</option>
               <option value="preparing">Przygotowywanie audio</option>
-              <option value="prepared">Gotowe do Groq</option>
+              <option value="prepared">Gotowe do zewnętrznego STT</option>
               <option value="transcribing">Transkrybowanie lokalne</option>
               <option value="done">Gotowe</option>
               <option value="error">Błąd</option>
@@ -135,7 +135,7 @@
           <div class="form-group" style="min-width:240px">
             <label>Tryb przetwarzania</label>
             <select id="add-mode">
-              <option value="prepare">FFmpeg → chunki → n8n / Groq (zalecany)</option>
+              <option value="prepare">FFmpeg → chunki → n8n / zewnętrzny STT (zalecany)</option>
               <option value="transcribe">Lokalna transkrypcja na Raspberry Pi</option>
             </select>
           </div>
@@ -164,7 +164,7 @@
       </div>
       <div class="card" style="border-color:#1e3a5f">
         <h2 style="color:#93c5fd">Integracja z n8n</h2>
-        <p style="font-size:13px;color:#94a3b8;margin-bottom:12px">Dla Groq/n8n użyj <code>POST /api/prepare</code>; dla starej lokalnej ścieżki — <code>POST /api/transcribe</code>.</p>
+        <p style="font-size:13px;color:#94a3b8;margin-bottom:12px">Dla zewnętrznego STT w n8n użyj <code>POST /api/prepare</code>; dla starej lokalnej ścieżki — <code>POST /api/transcribe</code>.</p>
         <pre style="background:#0f172a;padding:16px;border-radius:6px;font-size:12px;color:#94a3b8;overflow-x:auto">POST /api/prepare
 {
   "audio_url": "https://...",
@@ -260,7 +260,7 @@ async function api(method, path, body) {
 }
 
 function statusBadge(s) {
-  const labels = { queued: 'W kolejce', transcribing: 'Transkrybowanie', done: 'Gotowe', error: 'Błąd', skipped: 'Pominięty' };
+  const labels = { queued: 'W kolejce', preparing: 'Przygotowywanie audio', prepared: 'Gotowe do zewnętrznego STT', transcribing: 'Transkrybowanie', done: 'Gotowe', error: 'Błąd', skipped: 'Pominięty' };
   return `<span class="badge badge-${s}">${labels[s] || s}</span>`;
 }
 
@@ -416,7 +416,7 @@ function buildEpisodesTable(episodes, showActions) {
           ${e.status === 'done' ? `<button class="btn-ghost btn-sm" onclick="retryEpisode(${e.id})">Transkrybuj ponownie</button>` : ''}
           ${e.status === 'skipped' ? `<button class="btn-primary btn-sm" onclick="retryEpisode(${e.id})">Transkrybuj</button>` : ''}
           ${e.status === 'error' ? `<button class="btn-primary btn-sm" onclick="retryEpisode(${e.id})">Ponów</button>` : ''}
-          ${['done', 'error', 'skipped'].includes(e.status) ? `<button class="btn-ghost btn-sm" onclick="deleteEpisode(${e.id})">Usuń</button>` : ''}
+          ${['prepared', 'done', 'error', 'skipped'].includes(e.status) ? `<button class="btn-ghost btn-sm" onclick="deleteEpisode(${e.id})">Usuń</button>` : ''}
         </td>` : ''}
       </tr>`).join('')}
     </tbody>

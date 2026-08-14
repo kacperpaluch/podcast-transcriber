@@ -2,14 +2,14 @@
 
 [![Docker Hub](https://img.shields.io/docker/pulls/kpa90/podcast-web?logo=docker&label=Docker%20Hub)](https://hub.docker.com/r/kpa90/podcast-web)
 
-Lokalny serwis przygotowania i transkrypcji podcastów dla Raspberry Pi 4/5 (8 GB RAM). Przyjmuje URL pliku audio przez API; może transkrybować go lokalnie (faster-whisper lub Parakeet) albo przygotować małe pliki MP3 dla zewnętrznego STT. Monitorowanie RSS, Groq STT, podsumowanie i Telegram pozostają w n8n.
+Lokalny serwis przygotowania i transkrypcji podcastów dla Raspberry Pi 4/5 (8 GB RAM). Przyjmuje URL pliku audio przez API; może transkrybować go lokalnie (faster-whisper lub Parakeet) albo przygotować małe pliki MP3 dla zewnętrznego STT. Monitorowanie RSS, wybór dostawcy STT, podsumowanie i Telegram pozostają w n8n.
 
 ## Architektura
 
 ```
 n8n (RSS + logika) → POST /api/transcribe → kolejka SQLite → worker-controller → transcriber → webhook n8n
 
-n8n (RSS + Groq) → POST /api/prepare → kolejka SQLite → FFmpeg → webhook z manifestem → Groq STT w n8n
+n8n (RSS + zewnętrzny STT) → POST /api/prepare → kolejka SQLite → FFmpeg → webhook z manifestem → wybrany STT w n8n
 ```
 
 | Kontener | Rola | RAM |
@@ -92,16 +92,16 @@ Usuwa przygotowane pliki po pomyślnej transkrypcji i podsumowaniu w n8n.
 
 ### DELETE /api/episodes/{episode_id}
 
-Trwale usuwa zakończony lub błędny odcinek oraz jego pliki robocze. Dzięki temu ten sam GUID można ponownie uruchomić z RSS przez nową ścieżkę Groq. Endpoint nie pozwala usuwać zadań `queued`, `preparing`, `prepared` ani `transcribing`.
+Trwale usuwa zakończony, błędny lub przygotowany do zewnętrznego STT odcinek oraz jego pliki robocze. Dzięki temu ten sam GUID można ponownie uruchomić z RSS przez nową ścieżkę zewnętrznego STT. Endpoint nie pozwala usuwać zadań `queued`, `preparing` ani `transcribing`.
 
-W tabeli odcinków na **Panelu głównym** odpowiada mu przycisk **Usuń** z potwierdzeniem. Przycisk **Usuń całą historię** usuwa tylko odcinki zakończone, błędne i pominięte — aktywne zadania pozostają nienaruszone. Przycisk **Transkrybuj ponownie** zachowuje istniejący tryb zadania; aby przełączyć historyczny odcinek na nową ścieżkę, najpierw wybierz **Usuń**, a następnie uruchom go ponownie w n8n.
+W tabeli odcinków na **Panelu głównym** odpowiada mu przycisk **Usuń** z potwierdzeniem; działa też dla pozycji `prepared`, usuwając jej chunki i odblokowując GUID. Przycisk **Usuń całą historię** usuwa tylko odcinki zakończone, błędne i pominięte — aktywne zadania pozostają nienaruszone. Przycisk **Transkrybuj ponownie** zachowuje istniejący tryb zadania; aby przełączyć historyczny odcinek na nową ścieżkę, najpierw wybierz **Usuń**, a następnie uruchom go ponownie w n8n.
 
 ## Konfiguracja
 
 Przez interfejs webowy:
 
 1. **Ustawienia** → model transkrypcji, URL webhooka n8n
-2. **Dodaj transkrypcję** → wybór: lokalna transkrypcja albo **FFmpeg → chunki → webhook n8n/Groq** (zalecany)
+2. **Dodaj transkrypcję** → wybór: lokalna transkrypcja albo **FFmpeg → chunki → webhook n8n/zewnętrzny STT** (zalecany)
 3. **Panel główny** → statystyki, aktywna transkrypcja, pełna lista odcinków sortowana chronologicznie, filtrowanie i bezpieczne czyszczenie historii
 4. **Historia webhooków** → log wysłanych webhooków z możliwością ponownego wysłania
 
@@ -142,15 +142,15 @@ Webhook Trigger (stały URL) → odbiera transkrypcję → przetwarza dalej
 
 Ustaw ten URL jako **URL webhooka** w Ustawieniach aplikacji. Po każdej transkrypcji aplikacja automatycznie wysyła wynik na ten adres.
 
-### Flow 3 — Groq STT w n8n (rekomendowany)
+### Flow 3 — zewnętrzny STT w n8n (rekomendowany)
 
 ```
 RSS Feed Trigger → HTTP Request POST /api/prepare → webhook audio_prepared
-→ pobierz każdy chunk → Groq /audio/transcriptions → scal tekst
+→ pobierz każdy chunk → wybrany endpoint STT → scal tekst
 → podsumowanie → Telegram → POST /api/jobs/{job_id}/cleanup
 ```
 
-Trzy żądania serwisu (`/api/prepare`, pobieranie chunków, `/cleanup`) nie wymagają credentialu; są przeznaczone dla prywatnej sieci domowej. Klucz Groq pozostaje w istniejącym credentialu n8n.
+Trzy żądania serwisu (`/api/prepare`, pobieranie chunków, `/cleanup`) nie wymagają credentialu; są przeznaczone dla prywatnej sieci domowej. Klucz do wybranego dostawcy STT pozostaje w credentialu skonfigurowanym przez użytkownika w n8n.
 
 ## Webhook payload
 
