@@ -26,7 +26,6 @@ services:
       - podcast_data:/data
     environment:
       - DB_PATH=/data/app.db
-      - N8N_API_TOKEN=${N8N_API_TOKEN:-}
     mem_limit: 300m
 
   worker-controller:
@@ -73,7 +72,7 @@ Zwraca status: `queued`, `preparing`, `prepared`, `transcribing`, `done`, `error
 
 ### POST /api/prepare
 
-Kolejkuje przygotowanie plików MP3 dla Groq STT w n8n. Wymaga nagłówka `X-Podcast-Token`, zgodnego z `N8N_API_TOKEN`. Worker koduje audio do mono MP3 16 kHz / 32 kbps i dzieli je domyślnie na części po 30 minut; następnie webhook do n8n zawiera manifest chunków.
+Kolejkuje przygotowanie plików MP3 dla Groq STT w n8n. Przeznaczony do użycia wyłącznie w prywatnej sieci domowej. Worker koduje audio do mono MP3 16 kHz / 32 kbps i dzieli je domyślnie na części po 30 minut; następnie webhook do n8n zawiera manifest chunków.
 
 ## Zmienne środowiskowe
 
@@ -84,7 +83,6 @@ Kolejkuje przygotowanie plików MP3 dla Groq STT w n8n. Wymaga nagłówka `X-Pod
 | `HOST_DATA_PATH` | worker | Ścieżka do `/data` na hoście (wymagana do montowania wolumenów) |
 | `COMPOSE_NETWORK` | worker | Sieć Docker Compose (domyślnie `podcast_default`) |
 | `PARAKEET_IMAGE` | worker | Obraz Parakeet (opcjonalnie, dla modelu parakeet-tdt-0.6b-v3) |
-| `N8N_API_TOKEN` | web | Sekret nagłówka `X-Podcast-Token` dla endpointów przygotowania i cleanupu |
 | `EXTERNAL_STT_CHUNK_SECS` | worker | Maksymalny czas chunka, domyślnie `1800` s |
 | `EXTERNAL_STT_AUDIO_BITRATE` | worker | Bitrate przygotowanego MP3, domyślnie `32k` |
 

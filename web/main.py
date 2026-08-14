@@ -2,11 +2,10 @@ import sys
 import os
 import uuid
 import json
-import secrets
 import shutil
 sys.path.insert(0, "/app/shared")
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -34,13 +33,6 @@ class TranscribeRequest(BaseModel):
     guid: Optional[str] = None
     published_at: Optional[str] = None
     duration_seconds: Optional[int] = None
-
-
-def verify_n8n_token(x_podcast_token: Optional[str] = Header(default=None)):
-    """Authorize n8n-only preparation, file transfer and cleanup endpoints."""
-    expected = os.environ.get("N8N_API_TOKEN", "")
-    if not expected or not x_podcast_token or not secrets.compare_digest(x_podcast_token, expected):
-        raise HTTPException(401, "Invalid or missing X-Podcast-Token")
 
 
 def _queue_request(req: TranscribeRequest, processing_mode: str):
@@ -86,8 +78,7 @@ def queue_transcription(req: TranscribeRequest):
 
 
 @app.post("/api/prepare", status_code=202)
-def queue_preparation(req: TranscribeRequest, x_podcast_token: Optional[str] = Header(default=None)):
-    verify_n8n_token(x_podcast_token)
+def queue_preparation(req: TranscribeRequest):
     return _queue_request(req, "prepare")
 
 
@@ -114,9 +105,8 @@ def get_job_status(job_id: int):
 
 
 @app.get("/api/jobs/{job_id}/chunks/{chunk_index}")
-def get_prepared_chunk(job_id: int, chunk_index: int, x_podcast_token: Optional[str] = Header(default=None)):
+def get_prepared_chunk(job_id: int, chunk_index: int):
     """Serve one prepared chunk to n8n without exposing host filesystem paths."""
-    verify_n8n_token(x_podcast_token)
     with db.db() as conn:
         row = conn.execute(
             "SELECT processing_mode, prepared_manifest FROM episodes WHERE id=?", (job_id,)
@@ -138,9 +128,8 @@ def get_prepared_chunk(job_id: int, chunk_index: int, x_podcast_token: Optional[
 
 
 @app.post("/api/jobs/{job_id}/cleanup")
-def cleanup_prepared_job(job_id: int, x_podcast_token: Optional[str] = Header(default=None)):
+def cleanup_prepared_job(job_id: int):
     """Remove prepared audio after n8n completed transcription and summary."""
-    verify_n8n_token(x_podcast_token)
     with db.db() as conn:
         row = conn.execute("SELECT processing_mode FROM episodes WHERE id=?", (job_id,)).fetchone()
         if not row:

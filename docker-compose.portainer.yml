@@ -21,7 +21,6 @@ services:
       - podcast_data:/data
     environment:
       - DB_PATH=/data/app.db
-      - N8N_API_TOKEN=${N8N_API_TOKEN:-}
     mem_limit: 300m
 
   worker-controller:

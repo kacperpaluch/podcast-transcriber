@@ -39,10 +39,10 @@ cd podcast-transcriber
 ### 2. Uruchom
 
 ```bash
-N8N_API_TOKEN=$(openssl rand -hex 32) HOST_DATA_PATH=$(pwd)/data docker compose up -d
+HOST_DATA_PATH=$(pwd)/data docker compose up -d
 ```
 
-Zapisz wartość `N8N_API_TOKEN` w credentialu n8n jako `X-Podcast-Token`; jest wymagana przez nową ścieżkę przygotowania audio. Przy pierwszym uruchomieniu model Whisper (~800 MB) zostanie pobrany automatycznie do `./data/models/` i będzie używany przy kolejnych uruchomieniach.
+Przy pierwszym uruchomieniu model Whisper (~800 MB) zostanie pobrany automatycznie do `./data/models/` i będzie używany przy kolejnych uruchomieniach.
 
 ### 3. Otwórz UI
 
@@ -78,17 +78,17 @@ Zwraca status transkrypcji lub przygotowania audio: `queued`, `preparing`, `prep
 
 ### POST /api/prepare
 
-Kolejkuje pobranie i przygotowanie audio do zewnętrznego STT. Endpoint wymaga nagłówka `X-Podcast-Token`, którego wartość jest taka sama jak zmienna `N8N_API_TOKEN` kontenera `podcast-web`.
+Kolejkuje pobranie i przygotowanie audio do zewnętrznego STT. Endpoint jest przeznaczony do użycia wyłącznie w prywatnej sieci domowej.
 
 Żądanie ma ten sam format co `/api/transcribe`. Worker pobiera audio bezpośrednio z URL, koduje je do MP3 mono 16 kHz / 32 kbps i dzieli domyślnie na części po 30 minut. Po przygotowaniu wysyła skonfigurowany webhook do n8n z `event: "audio_prepared"`, `job_id` i manifestem chunków.
 
 ### GET /api/jobs/{job_id}/chunks/{chunk_index}
 
-Pobiera pojedynczy przygotowany MP3. Wymaga `X-Podcast-Token`; jest przeznaczony wyłącznie dla n8n.
+Pobiera pojedynczy przygotowany MP3 dla n8n w prywatnej sieci domowej.
 
 ### POST /api/jobs/{job_id}/cleanup
 
-Usuwa przygotowane pliki po pomyślnej transkrypcji i podsumowaniu w n8n. Wymaga `X-Podcast-Token`.
+Usuwa przygotowane pliki po pomyślnej transkrypcji i podsumowaniu w n8n.
 
 ## Konfiguracja
 
@@ -145,7 +145,7 @@ RSS Feed Trigger → HTTP Request POST /api/prepare → webhook audio_prepared
 → podsumowanie → Telegram → POST /api/jobs/{job_id}/cleanup
 ```
 
-W trzech żądaniach serwisu (`/api/prepare`, pobieranie chunków, `/cleanup`) skonfiguruj credential typu Header Auth: `X-Podcast-Token: <N8N_API_TOKEN>`. Klucz Groq pozostaje w istniejącym credentialu n8n.
+Trzy żądania serwisu (`/api/prepare`, pobieranie chunków, `/cleanup`) nie wymagają credentialu; są przeznaczone dla prywatnej sieci domowej. Klucz Groq pozostaje w istniejącym credentialu n8n.
 
 ## Webhook payload
 
@@ -191,7 +191,7 @@ docker compose logs -f web
 
 `worker-controller` wymaga dostępu do Docker socket (`/var/run/docker.sock`) — daje to efektywnie uprawnienia root na hoście. Akceptowalne na prywatnym Raspberry Pi, nie wystawiaj portu 8080 publicznie bez uwierzytelnienia.
 
-Endpointy przygotowania audio wymagają sekretu `N8N_API_TOKEN`; nie ustawiaj go na pustą wartość, gdy korzystasz z `/api/prepare`.
+Endpointy przygotowania audio nie mają uwierzytelnienia; nie wystawiaj portu 8033 poza prywatną sieć domową.
 
 ## Build i push na Docker Hub
 
