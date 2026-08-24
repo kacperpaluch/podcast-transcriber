@@ -36,3 +36,10 @@ env/
 # Lokalne konfiguracje (nie commituj)
 docker-compose-*.yaml
 docker-compose-*.yml
+
+# Agentbox — pliki generowane lokalnie
+.claude/
+.codex/
+.opencode/
+.skillbox/
+.mcp.json
