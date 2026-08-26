@@ -43,3 +43,5 @@ docker-compose-*.yml
 .opencode/
 .skillbox/
 .mcp.json
+opencode.json
+opencode.jsonc
