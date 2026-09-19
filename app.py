@@ -26,7 +26,10 @@ CPU_THREADS = int(os.environ.get("CPU_THREADS", "4"))
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 IDLE_UNLOAD_SECS = int(os.environ.get("IDLE_UNLOAD_SECS", "300"))
 MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
-RETRY_DELAYS = [5, 15, 30, 60, 120]
+MAX_AUDIO_MB = int(os.environ.get("MAX_AUDIO_MB", "1000"))
+WEBHOOK_MAX_ATTEMPTS = int(os.environ.get("WEBHOOK_MAX_ATTEMPTS", "10"))
+# Odstepy miedzy kolejnymi probami webhooka; ostatnia wartosc powtarza sie.
+WEBHOOK_DELAYS = [5, 15, 30, 60, 120, 300, 900, 3600]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("podcast")
@@ -53,11 +56,24 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'queued',
             duration_seconds INTEGER, progress_seconds INTEGER DEFAULT 0,
             transcript TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+            webhook_ok INTEGER NOT NULL DEFAULT 0,
+            webhook_attempts INTEGER NOT NULL DEFAULT 0,
+            webhook_after REAL NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (datetime('now')))""")
-        try:  # migracja dla baz sprzed wprowadzenia licznika prób
-            c.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
+        migrated = False
+        for col, decl in (("attempts", "INTEGER NOT NULL DEFAULT 0"),
+                          ("webhook_ok", "INTEGER NOT NULL DEFAULT 0"),
+                          ("webhook_attempts", "INTEGER NOT NULL DEFAULT 0"),
+                          ("webhook_after", "REAL NOT NULL DEFAULT 0")):
+            try:  # migracja baz sprzed dodania kolumny
+                c.execute(f"ALTER TABLE jobs ADD COLUMN {col} {decl}")
+                migrated = migrated or col == "webhook_ok"
+            except sqlite3.OperationalError:
+                pass
+        # Zadania zakonczone przed wprowadzeniem kolejki webhookow maja swoje
+        # webhooki juz wyslane — bez tego aktualizacja zalalaby n8n powtorkami.
+        if migrated:
+            c.execute("UPDATE jobs SET webhook_ok=1 WHERE status='done'")
         # Po restarcie dokończ to, co było w locie — ale zadanie, które ubiło
         # proces MAX_ATTEMPTS razy (np. przez OOM), odkłada się na bok zamiast
         # restartować aplikację w nieskończoność.
@@ -83,22 +99,50 @@ def payload_for(row) -> dict:
     }
 
 
-def send_webhook(row) -> bool:
+def try_webhook(job_id: int):
+    """Jedna proba wyslania. Bez sleep — nieudana wysylka nie moze blokowac
+    kolejki, wiec kolejna proba jest planowana w bazie i podejmie ja petla."""
+    with db() as c:
+        row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not WEBHOOK_URL:
         log.warning("Brak WEBHOOK_URL — pomijam wysyłkę")
-        return True
-    for attempt, delay in enumerate([0] + RETRY_DELAYS):
-        if delay:
-            time.sleep(delay)
-        try:
-            r = httpx.post(WEBHOOK_URL, json=payload_for(row), timeout=30)
-            if r.status_code < 400:
-                log.info("Webhook OK (%s) dla %s", r.status_code, row["id"])
-                return True
-            log.warning("Webhook %s, próba %d", r.status_code, attempt + 1)
-        except Exception as e:
-            log.warning("Webhook błąd (%s), próba %d", e, attempt + 1)
-    return False
+        with db() as c:
+            c.execute("UPDATE jobs SET webhook_ok=1 WHERE id=?", (job_id,))
+        return
+    n = row["webhook_attempts"] + 1
+    try:
+        r = httpx.post(WEBHOOK_URL, json=payload_for(row), timeout=30)
+        if r.status_code < 400:
+            log.info("Webhook OK (%s) dla zadania %d", r.status_code, job_id)
+            with db() as c:
+                c.execute("UPDATE jobs SET webhook_ok=1, webhook_attempts=?, error=NULL "
+                          "WHERE id=?", (n, job_id))
+            return
+        why = f"HTTP {r.status_code}"
+    except Exception as e:
+        why = str(e)[:200]
+
+    delay = WEBHOOK_DELAYS[min(n - 1, len(WEBHOOK_DELAYS) - 1)]
+    if n >= WEBHOOK_MAX_ATTEMPTS:
+        log.error("Webhook poddaje sie po %d probach (%s), zadanie %d", n, why, job_id)
+        err = f"webhook nieudany po {n} probach: {why}"
+        nxt = 0.0
+    else:
+        log.warning("Webhook nieudany (%s), proba %d, ponowie za %ds", why, n, delay)
+        err = f"webhook: {why}"
+        nxt = time.time() + delay
+    with db() as c:
+        c.execute("UPDATE jobs SET webhook_attempts=?, webhook_after=?, error=? WHERE id=?",
+                  (n, nxt, err, job_id))
+
+
+def pending_webhook():
+    """Zadanie gotowe, ktorego webhook jeszcze nie doszedl i nadszedl czas proby."""
+    with db() as c:
+        return c.execute(
+            "SELECT id FROM jobs WHERE status='done' AND webhook_ok=0 "
+            "AND webhook_attempts < ? AND webhook_after <= ? ORDER BY id LIMIT 1",
+            (WEBHOOK_MAX_ATTEMPTS, time.time())).fetchone()
 
 
 def transcribe(model, path: str, job_id: int, language):
@@ -118,33 +162,39 @@ def transcribe(model, path: str, job_id: int, language):
     return "\n".join(parts)
 
 
+def download(url: str, path: str):
+    limit = MAX_AUDIO_MB * 1024 * 1024
+    log.info("Pobieram %s", url)
+    size = 0
+    with httpx.stream("GET", url, follow_redirects=True, timeout=300) as r:
+        r.raise_for_status()
+        with open(path, "wb") as f:
+            for chunk in r.iter_bytes(chunk_size=65536):
+                size += len(chunk)
+                if size > limit:
+                    raise ValueError(f"plik przekracza MAX_AUDIO_MB={MAX_AUDIO_MB}")
+                f.write(chunk)
+    log.info("Pobrano %.1f MB", size / 1_048_576)
+
+
 def process(model, job_id: int):
     with db() as c:
         c.execute("UPDATE jobs SET status='running', attempts=attempts+1 WHERE id=?", (job_id,))
         row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
 
     path = os.path.join(AUDIO_DIR, f"job_{job_id}.audio")
-    log.info("Pobieram %s", row["audio_url"])
-    with httpx.stream("GET", row["audio_url"], follow_redirects=True, timeout=300) as r:
-        r.raise_for_status()
-        with open(path, "wb") as f:
-            for chunk in r.iter_bytes(chunk_size=65536):
-                f.write(chunk)
-
-    try:
+    try:  # obejmuje pobieranie, zeby zerwane polaczenie nie zostawialo ogona na dysku
+        download(row["audio_url"], path)
         log.info("Transkrybuję zadanie %d", job_id)
         text = transcribe(model, path, job_id, row["language"])
     finally:
-        os.remove(path)
+        if os.path.exists(path):
+            os.remove(path)
 
     with db() as c:
         c.execute("UPDATE jobs SET transcript=?, status='done' WHERE id=?", (text, job_id))
-        row = c.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
     log.info("Gotowe: zadanie %d, %d znaków", job_id, len(text))
-
-    if not send_webhook(row):
-        with db() as c:
-            c.execute("UPDATE jobs SET error='webhook nieudany' WHERE id=?", (job_id,))
+    try_webhook(job_id)
 
 
 def worker():
@@ -157,6 +207,10 @@ def worker():
             row = c.execute(
                 "SELECT id FROM jobs WHERE status='queued' ORDER BY id LIMIT 1").fetchone()
         if not row:
+            late = pending_webhook()
+            if late:
+                try_webhook(late["id"])
+                continue
             if model is not None and time.time() - idle_since > IDLE_UNLOAD_SECS:
                 log.info("Kolejka pusta — zwalniam model")
                 model = None

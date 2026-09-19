@@ -41,7 +41,9 @@ Wszystko przez zmienne środowiskowe w `compose.yaml`:
 | `MODEL` | `large-v3-turbo` | Model faster-whisper. |
 | `CPU_THREADS` | `4` | Wątki CTranslate2 i limit rdzeni. Zwiększanie **nie przyspiesza** — patrz [BENCHMARKS.md](BENCHMARKS.md). |
 | `IDLE_UNLOAD_SECS` | `300` | Po tylu sekundach pustej kolejki model jest zwalniany z RAM. |
-| `MAX_ATTEMPTS` | `3` | Po tylu nieudanych próbach zadanie dostaje status `error` zamiast wracać do kolejki. |
+| `MAX_ATTEMPTS` | `3` | Ochrona przed pętlą restartów: jeśli zadanie tyle razy **ubiło cały proces** (np. przez OOM), dostaje status `error` zamiast wracać do kolejki. Zwykły wyjątek w trakcie transkrypcji kończy zadanie błędem od razu. |
+| `MAX_AUDIO_MB` | `1000` | Limit rozmiaru pobieranego pliku. Przekroczenie przerywa pobieranie. |
+| `WEBHOOK_MAX_ATTEMPTS` | `10` | Ile razy próbować dostarczyć webhook, zanim aplikacja odpuści. |
 | `DB_PATH`, `AUDIO_DIR`, `MODELS_DIR` | `/data/...` | Ścieżki wewnątrz kontenera. |
 
 ## API
@@ -89,9 +91,14 @@ Po zakończeniu transkrypcji aplikacja wysyła `POST` na `WEBHOOK_URL`:
 }
 ```
 
-Przy niepowodzeniu ponawia 5 razy z narastającym odstępem (5 s → 2 min). Jeśli
-wszystkie próby zawiodą, transkrypt zostaje w bazie, a zadanie dostaje adnotację
-w polu `error` — nic nie ginie, można odczytać przez `GET /api/jobs/{id}`.
+Nieudana wysyłka **nie blokuje kolejki** — kolejna próba jest zapisywana w bazie
+i podejmowana przez wątek roboczy, gdy nie ma nic do transkrybowania. Odstępy
+rosną: 5 s → 15 s → 30 s → 1 min → 2 min → 5 min → 15 min → 1 h, do
+`WEBHOOK_MAX_ATTEMPTS` prób. Dzięki temu restart n8n trwający godzinę nie gubi
+niczego.
+
+Gdyby wszystkie próby zawiodły, transkrypt zostaje w bazie z opisem w polu
+`error` i da się go odczytać przez `GET /api/jobs/{id}`.
 
 **Kształt tego payloadu to kontrakt z n8n.** Zmiana wymaga zmiany workflow;
 `test_app.py` pilnuje, żeby nie stało się to przypadkiem.
@@ -105,6 +112,9 @@ tego, ile odcinków czeka w kolejce.
 
 Model ładuje się przy pierwszym zadaniu i jest zwalniany po `IDLE_UNLOAD_SECS`
 bezczynności. Bezczynna aplikacja zajmuje ~100 MB, w trakcie pracy ~1,4 GB.
+
+Pobrany plik jest kasowany zawsze — także gdy pobieranie zerwie się w połowie
+albo transkrypcja rzuci wyjątkiem.
 
 Po restarcie zadania ze statusem `running` wracają do kolejki. Licznik `attempts`
 chroni przed pętlą: zadanie, które `MAX_ATTEMPTS` razy ubiło proces (np. przez
