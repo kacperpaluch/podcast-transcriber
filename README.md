@@ -116,17 +116,25 @@ Przez interfejs webowy:
 
 ### Wątki CPU
 
-CTranslate2 domyślnie używa **4 wątków** niezależnie od liczby rdzeni maszyny. Na hoście
-z większą liczbą rdzeni ustaw `WHISPER_CPU_THREADS` w `environment:` worker-controllera —
-wartość trafia zarówno do `cpu_threads` modelu, jak i do limitu `--cpus` kontenera
-transkrybera, więc transkrypcja nie zagłodzi pozostałych usług na serwerze.
+CTranslate2 domyślnie używa **4 wątków** niezależnie od liczby rdzeni maszyny.
+`WHISPER_CPU_THREADS` ustawia zarówno `cpu_threads` modelu, jak i limit `--cpus`
+kontenera transkrybera, żeby transkrypcja nie zagłodziła pozostałych usług na hoście.
 
 ```yaml
 environment:
-  - WHISPER_CPU_THREADS=8   # domyślnie 8; zostaw kilka rdzeni reszcie stacka
+  - WHISPER_CPU_THREADS=4
 ```
 
-Zmierzone na Ryzen 5 7530U (6C/12T), `large-v3-turbo` int8: 4 wątki → **2,7× realtime**.
+**Zwiększanie tej wartości nie przyspiesza transkrypcji.** Zmierzone na Ryzen 5 7530U
+(6C/12T), `large-v3-turbo` int8, 57-minutowy odcinek:
+
+| Wątki | Prędkość | Zużycie CPU |
+|---|---|---|
+| 4 | 2,69× realtime | 383% |
+| 8 | 2,67× realtime | 555% |
+
+Wąskim gardłem jest przepustowość pamięci, nie liczba rdzeni — int8 w kółko przelatuje
+przez wagi modelu. Dlatego domyślne 4 daje tę samą prędkość mniejszym kosztem.
 
 ### Parakeet (eksperymentalnie)
 

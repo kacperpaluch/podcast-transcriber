@@ -28,7 +28,8 @@ PARAKEET_IMAGE = os.environ.get("PARAKEET_IMAGE", "ghcr.io/achetronic/parakeet:l
 PARAKEET_CONTAINER = "podcast-parakeet-active"
 COMPOSE_NETWORK = os.environ.get("COMPOSE_NETWORK", "podcast_default")
 PARAKEET_CHUNK_SECS = 120  # 2 minutes — Parakeet ONNX uses full attention (quadratic RAM)
-WHISPER_CPU_THREADS = os.environ.get("WHISPER_CPU_THREADS", "8")
+WHISPER_CPU_THREADS = os.environ.get("WHISPER_CPU_THREADS", "4")
+WHISPER_BATCH_SIZE = os.environ.get("WHISPER_BATCH_SIZE", "0")
 EXTERNAL_STT_CHUNK_SECS = int(os.environ.get("EXTERNAL_STT_CHUNK_SECS", "3600"))
 EXTERNAL_STT_AUDIO_BITRATE = os.environ.get("EXTERNAL_STT_AUDIO_BITRATE", "32k")
 
@@ -91,6 +92,7 @@ def run_transcriber(audio_path: str, model: str) -> bool:
         f"--cpus={WHISPER_CPU_THREADS}",
         "-e", "HF_HUB_DISABLE_XET=1",
         "-e", f"WHISPER_CPU_THREADS={WHISPER_CPU_THREADS}",
+        "-e", f"WHISPER_BATCH_SIZE={WHISPER_BATCH_SIZE}",
         "-v", f"{HOST_DATA_PATH}:/data",
         TRANSCRIBER_IMAGE,
         "--input", container_audio_path,
@@ -498,10 +500,25 @@ def guid_short(guid):
     return (guid or "")[:16]
 
 
+def pull_images():
+    """Odswiez obrazy uruchamiane przez `docker run` — compose ich nie zna,
+    wiec bez tego zostaja na wersji z pierwszego pobrania."""
+    for image in (TRANSCRIBER_IMAGE, PARAKEET_IMAGE):
+        r = subprocess.run(["docker", "pull", image],
+                           capture_output=True, text=True, timeout=900)
+        if r.returncode == 0:
+            log.info("Pulled %s", image)
+        else:
+            # Obraz budowany lokalnie albo brak sieci — jedziemy na tym, co jest.
+            log.warning("Could not pull %s: %s", image, r.stderr.strip()[-200:])
+
+
 def main():
     db.init_db()
     os.makedirs(AUDIO_DIR, exist_ok=True)
     log.info("Worker controller started")
+
+    pull_images()
 
     # Safety: reset any episodes stuck in 'transcribing' from previous crash
     with db.db() as conn:

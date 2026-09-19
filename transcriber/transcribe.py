@@ -55,14 +55,25 @@ def transcribe_with_progress(audio_path: str, model_name: str, compute_type: str
     model = WhisperModel(model_name, device="cpu", compute_type=compute_type,
                          download_root=models_dir, cpu_threads=cpu_threads)
 
-    log.info("Starting transcription of %s", audio_path)
-    segments, info = model.transcribe(
-        audio_path,
+    kwargs = dict(
         language=language,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
         beam_size=5,
     )
+
+    # WHISPER_BATCH_SIZE > 1 grupuje okna wyciete przez VAD i dekoduje je razem.
+    batch_size = int(os.environ.get("WHISPER_BATCH_SIZE", "0"))
+    if batch_size > 1:
+        from faster_whisper import BatchedInferencePipeline
+        engine = BatchedInferencePipeline(model=model)
+        kwargs["batch_size"] = batch_size
+        log.info("Batched inference, batch_size=%d", batch_size)
+    else:
+        engine = model
+
+    log.info("Starting transcription of %s", audio_path)
+    segments, info = engine.transcribe(audio_path, **kwargs)
 
     log.info("Detected language: %s (prob=%.2f)", info.language, info.language_probability)
 
