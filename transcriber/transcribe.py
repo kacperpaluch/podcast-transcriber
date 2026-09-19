@@ -59,7 +59,7 @@ def transcribe_with_progress(audio_path: str, model_name: str, compute_type: str
         language=language,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
-        beam_size=5,
+        beam_size=int(os.environ.get("WHISPER_BEAM_SIZE", "5")),
     )
 
     # WHISPER_BATCH_SIZE > 1 grupuje okna wyciete przez VAD i dekoduje je razem.
