@@ -101,7 +101,7 @@ W tabeli odcinków na **Panelu głównym** odpowiada mu przycisk **Usuń** z pot
 Przez interfejs webowy:
 
 1. **Ustawienia** → model transkrypcji, URL webhooka n8n
-2. **Dodaj transkrypcję** → wybór: lokalna transkrypcja albo **FFmpeg → chunki → webhook n8n/zewnętrzny STT** (zalecany)
+2. **Dodaj transkrypcję** → wybór: lokalna transkrypcja (domyślna) albo **FFmpeg → chunki → webhook n8n/zewnętrzny STT**
 3. **Panel główny** → statystyki, aktywna transkrypcja, pełna lista odcinków sortowana chronologicznie, filtrowanie i bezpieczne czyszczenie historii
 4. **Historia webhooków** → log wysłanych webhooków z możliwością ponownego wysłania
 
@@ -113,6 +113,20 @@ Przez interfejs webowy:
 | `large-v3` | ★★★★★ | ~40–60 min | ~2,5 GB |
 | `medium` | ★★★ | ~10–15 min | ~1,5 GB |
 | `small` | ★★ | ~5–8 min | ~1 GB |
+
+### Wątki CPU
+
+CTranslate2 domyślnie używa **4 wątków** niezależnie od liczby rdzeni maszyny. Na hoście
+z większą liczbą rdzeni ustaw `WHISPER_CPU_THREADS` w `environment:` worker-controllera —
+wartość trafia zarówno do `cpu_threads` modelu, jak i do limitu `--cpus` kontenera
+transkrybera, więc transkrypcja nie zagłodzi pozostałych usług na serwerze.
+
+```yaml
+environment:
+  - WHISPER_CPU_THREADS=8   # domyślnie 8; zostaw kilka rdzeni reszcie stacka
+```
+
+Zmierzone na Ryzen 5 7530U (6C/12T), `large-v3-turbo` int8: 4 wątki → **2,7× realtime**.
 
 ### Parakeet (eksperymentalnie)
 

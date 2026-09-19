@@ -50,8 +50,10 @@ def transcribe_with_progress(audio_path: str, model_name: str, compute_type: str
     os.makedirs(models_dir, exist_ok=True)
 
     log.info("Loading model %s (%s)...", model_name, compute_type)
+    # CTranslate2 domyślnie bierze tylko 4 wątki niezależnie od liczby rdzeni.
+    cpu_threads = int(os.environ.get("WHISPER_CPU_THREADS", "0"))
     model = WhisperModel(model_name, device="cpu", compute_type=compute_type,
-                         download_root=models_dir)
+                         download_root=models_dir, cpu_threads=cpu_threads)
 
     log.info("Starting transcription of %s", audio_path)
     segments, info = model.transcribe(

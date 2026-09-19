@@ -28,6 +28,7 @@ PARAKEET_IMAGE = os.environ.get("PARAKEET_IMAGE", "ghcr.io/achetronic/parakeet:l
 PARAKEET_CONTAINER = "podcast-parakeet-active"
 COMPOSE_NETWORK = os.environ.get("COMPOSE_NETWORK", "podcast_default")
 PARAKEET_CHUNK_SECS = 120  # 2 minutes — Parakeet ONNX uses full attention (quadratic RAM)
+WHISPER_CPU_THREADS = os.environ.get("WHISPER_CPU_THREADS", "8")
 EXTERNAL_STT_CHUNK_SECS = int(os.environ.get("EXTERNAL_STT_CHUNK_SECS", "3600"))
 EXTERNAL_STT_AUDIO_BITRATE = os.environ.get("EXTERNAL_STT_AUDIO_BITRATE", "32k")
 
@@ -87,7 +88,9 @@ def run_transcriber(audio_path: str, model: str) -> bool:
         "docker", "run", "--rm",
         "--name", TRANSCRIBER_CONTAINER,
         "--memory=4g",
+        f"--cpus={WHISPER_CPU_THREADS}",
         "-e", "HF_HUB_DISABLE_XET=1",
+        "-e", f"WHISPER_CPU_THREADS={WHISPER_CPU_THREADS}",
         "-v", f"{HOST_DATA_PATH}:/data",
         TRANSCRIBER_IMAGE,
         "--input", container_audio_path,
