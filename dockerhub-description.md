@@ -1,96 +1,48 @@
 # Podcast Transcriber
 
-Lokalny serwis przygotowania i transkrypcji podcastów dla Raspberry Pi 4/5 (8 GB RAM). Pobiera audio po URL, transkrybuje lokalnie (faster-whisper lub Parakeet NVIDIA) albo przygotowuje małe MP3 dla zewnętrznego STT w n8n. Monitorowanie RSS, podsumowania i orkiestracja pozostają po stronie n8n.
+Lokalna transkrypcja podcastów dla n8n. Przyjmuje URL pliku audio, transkrybuje
+go na CPU (faster-whisper, `large-v3-turbo`) i odsyła gotowy tekst na webhook.
 
-## Kontenery
-
-| Obraz | Rola |
-|---|---|
-| `kpa90/podcast-web` | UI + REST API (FastAPI, port 8080) |
-| `kpa90/podcast-worker-controller` | Kolejka FIFO, uruchamia transkryber sekwencyjnie |
-| `kpa90/podcast-transcriber` | faster-whisper CPU, uruchamiany on-demand |
-
-## Szybki start (Portainer / docker-compose)
+Jeden kontener, jeden proces — kolejka SQLite, API i model w środku. Bez GPU.
 
 ```yaml
-name: podcast
-
 services:
-  web:
-    image: kpa90/podcast-web:latest
-    container_name: podcast-web
+  podcast:
+    image: kpa90/podcast-transcriber:latest
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8130:8080"
     volumes:
-      - podcast_data:/data
+      - ./data:/data
     environment:
-      - DB_PATH=/data/app.db
-    mem_limit: 300m
-
-  worker-controller:
-    image: kpa90/podcast-worker-controller:latest
-    container_name: podcast-worker-controller
-    restart: unless-stopped
-    volumes:
-      - podcast_data:/data
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - DB_PATH=/data/app.db
-      - TRANSCRIBER_IMAGE=kpa90/podcast-transcriber:latest
-      - HOST_DATA_PATH=${HOST_DATA_PATH}
-      - COMPOSE_NETWORK=podcast_default
-      - PARAKEET_IMAGE=ghcr.io/achetronic/parakeet:latest
-      - EXTERNAL_STT_CHUNK_SECS=3600
-      - EXTERNAL_STT_AUDIO_BITRATE=32k
-    mem_limit: 200m
-
-volumes:
-  podcast_data:
+      - TZ=Europe/Warsaw
+      - WEBHOOK_URL=https://twoj-n8n/webhook/xxx
+      - CPU_THREADS=4
+    mem_limit: 3g
 ```
-
-Ustaw zmienną `HOST_DATA_PATH` na absolutną ścieżkę do katalogu danych na hoście, np. `/opt/podcast-transcriber/data`.
 
 ## API
 
-### POST /api/transcribe
+- `POST /api/transcribe` — `{"audio_url": "...", "language": "pl"}` → `202` + `job_id`
+- `GET /api/jobs/{id}` — status, postęp, transkrypt
+- `GET /` — lista ostatnich zadań
 
-```json
-{
-  "audio_url": "https://example.com/odcinek.mp3",
-  "language": "pl",
-  "episode_title": "Tytuł odcinka",
-  "feed_name": "Nazwa kanału"
-}
-```
+Po zakończeniu leci `POST` na `WEBHOOK_URL` ze zdarzeniem `transcription_completed`
+i pełnym transkryptem. Przy błędzie 5 ponowień z narastającym odstępem.
 
-Odpowiedź: `202 Accepted {"job_id": 42}`
+## Konfiguracja
 
-### GET /api/jobs/{job_id}
+| Zmienna | Domyślnie |
+|---|---|
+| `WEBHOOK_URL` | — |
+| `MODEL` | `large-v3-turbo` |
+| `CPU_THREADS` | `4` |
+| `IDLE_UNLOAD_SECS` | `300` |
+| `MAX_ATTEMPTS` | `3` |
 
-Zwraca status: `queued`, `preparing`, `prepared`, `transcribing`, `done`, `error` + `progress_pct`.
+Transkrypcje są sekwencyjne, więc zużycie RAM jest stałe (~1,4 GB w trakcie
+pracy, ~100 MB bezczynnie — model jest zwalniany po okresie bezczynności).
 
-### POST /api/prepare
+Wydajność: ~2,7× realtime na AMD Ryzen 5 7530U, czyli godzinne nagranie w ~21 min.
 
-Kolejkuje przygotowanie plików MP3 dla zewnętrznego STT w n8n. Przeznaczony do użycia wyłącznie w prywatnej sieci domowej. Worker koduje audio do mono MP3 16 kHz / 32 kbps i dzieli je domyślnie na części po 60 minut (około 14–15 MB na godzinę); następnie webhook do n8n zawiera manifest chunków.
-
-## Zmienne środowiskowe
-
-| Zmienna | Kontener | Opis |
-|---|---|---|
-| `DB_PATH` | web, worker | Ścieżka do bazy SQLite (domyślnie `/data/app.db`) |
-| `TRANSCRIBER_IMAGE` | worker | Obraz transkrybera (domyślnie `kpa90/podcast-transcriber:latest`) |
-| `HOST_DATA_PATH` | worker | Ścieżka do `/data` na hoście (wymagana do montowania wolumenów) |
-| `COMPOSE_NETWORK` | worker | Sieć Docker Compose (domyślnie `podcast_default`) |
-| `PARAKEET_IMAGE` | worker | Obraz Parakeet (opcjonalnie, dla modelu parakeet-tdt-0.6b-v3) |
-| `EXTERNAL_STT_CHUNK_SECS` | worker | Maksymalny czas chunka, domyślnie `3600` s |
-| `EXTERNAL_STT_AUDIO_BITRATE` | worker | Bitrate przygotowanego MP3, domyślnie `32k` |
-
-Tabela odcinków na **Panelu głównym** pozwala trwale usunąć ukończony, błędny lub przygotowany do zewnętrznego STT odcinek wraz z chunkami, aby ten sam GUID można było przetworzyć ponownie przez n8n. **Usuń całą historię** obejmuje też status `prepared`, ale nigdy aktywne zadania.
-
-W panelu **Dodaj transkrypcję** można wybrać lokalną transkrypcję albo przygotowanie **FFmpeg → chunki → webhook n8n/zewnętrzny STT**. Pełna lista odcinków jest częścią Panelu głównego, sortowaną chronologicznie od najnowszych; umożliwia filtrowanie oraz bezpieczne wyczyszczenie historii bez aktywnych zadań.
-
-## Więcej informacji
-
-Pełna dokumentacja, instrukcja integracji z n8n i opis modeli Whisper/Parakeet:
-[github.com/kacperpaluch/podcast-transcriber](https://github.com/kacperpaluch/podcast-transcriber)
+Kod i pełne benchmarki: https://github.com/kacperpaluch/podcast-transcriber

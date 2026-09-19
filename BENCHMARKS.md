@@ -78,7 +78,7 @@ z interpunkcją i wielkimi literami.
 
 1. **Dla whispera wąskim gardłem jest przepustowość pamięci, nie liczba rdzeni.** Int8 w kółko
    przelatuje przez wagi modelu; dołożenie wątków powoduje, że rdzenie czekają na
-   RAM zamiast liczyć. Stąd `WHISPER_CPU_THREADS=4` jako ustawienie produkcyjne —
+   RAM zamiast liczyć. Stąd `CPU_THREADS=4` jako ustawienie produkcyjne —
    ta sama prędkość co przy 8, a pozostałe kontenery odzyskują ~1,5 rdzenia.
 2. **Batching (`BatchedInferencePipeline`) opłaca się na GPU, nie na CPU.**
    Grupowanie okien po VAD zwiększa zbiór roboczy bez zwiększania przepustowości.
@@ -95,8 +95,8 @@ z interpunkcją i wielkimi literami.
    czyli realnie korzysta z rdzeni, których whisper nie potrafi wykorzystać.
    Jego dekoder TDT waży 18 MB wobec autoregresyjnego dekodera whispera z
    `beam_size=5`, więc na każdy token czyta z pamięci ułamek tego co whisper.
-   Pomiar 7,08× wykonano bez limitu CPU. Dodano `PARAKEET_CPUS` (domyślnie 10),
-   bo bez niego kontener zabierał prawie całą maszynę.
+   Pomiar 7,08× wykonano bez limitu CPU — kontener Parakeeta zabierał wtedy
+   prawie całą maszynę.
 6. **GPU to inna liga.** DeepInfra robi ten sam odcinek w sekundy — różnica to
    ~1000× w przepustowości obliczeń plus równoległe dekodowanie wielu okien 30 s.
 
@@ -211,17 +211,18 @@ przekręcone nazwiska widać w każdym podsumowaniu. Dlatego domyślnym modelem
 zostaje `large-v3-turbo`. Parakeet ma sens przy nadrabianiu zaległego archiwum,
 gdzie liczy się przepustowość, a nie precyzja nazwisk.
 
+> **Uwaga:** od uproszczenia aplikacji (wrzesień 2026) obsługiwany jest wyłącznie
+> `large-v3-turbo` przez `faster-whisper`. Parakeet, Qwen i tryb `prepare` zostały
+> usunięte z kodu — pomiary poniżej zostają jako uzasadnienie tej decyzji.
+
 ## Do przetestowania
 
 | Test | Hipoteza | Koszt |
 |---|---|---|
-| `PARAKEET_CHUNK_SECS` 120 → 300/600 | mniej restartów kontenera (29 → 12 → 6) | stała → zmienna env |
-| `medium` / `small` zamiast `large-v3-turbo` | ~1,2–1,5× szybciej, gorsza jakość po polsku | zmiana ustawienia |
+| — | wszystko z tej listy zostało sprawdzone | — |
 
-`PARAKEET_CHUNK_SECS=120` dobrano pod 8 GB Raspberry Pi. Parakeet liczy pełną
-atencję, więc RAM rośnie kwadratowo z długością fragmentu — ale przy 14,5 GB i
-limicie 4 GB na kontener jest zapas. Osobny powód cięcia: ONNX Runtime nie zwalnia
-aren pamięci między requestami, stąd restart kontenera po każdym chunku.
+Jedyny otwarty kandydat to **Cohere Transcribe 2B** — opisany niżej, wart powrotu
+tylko wtedy, gdyby whisper zaczął gubić nazwy własne.
 
 ## Odrzucone bez testu
 

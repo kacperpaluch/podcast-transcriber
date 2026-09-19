@@ -1,45 +1,23 @@
 #!/usr/bin/env bash
-# Buduje i (opcjonalnie) pushuje wszystkie obrazy na Docker Hub.
-# Multi-platform: linux/arm64 + linux/amd64 przez docker buildx.
+# Buduje i wypycha obraz na Docker Hub (linux/amd64 + linux/arm64).
 #
-# Użycie:
-#   ./build-push.sh <twoj_login>              # build + push, tag latest
-#   ./build-push.sh <twoj_login> 1.0.0        # build + push, tag 1.0.0
-#   PUSH=0 ./build-push.sh <twoj_login>       # tylko build lokalny (bez push)
+#   ./build-push.sh                # tag latest + krotki SHA
+#   PUSH=0 ./build-push.sh         # tylko build lokalny
 set -euo pipefail
 
-DOCKERHUB_USER="${1:?Podaj login Docker Hub, np.: ./build-push.sh jankowalski}"
-TAG="${2:-latest}"
-PUSH="${PUSH:-1}"
-PLATFORMS="linux/arm64,linux/amd64"
-
-PREFIX="${DOCKERHUB_USER}/"
+IMAGE="${IMAGE:-kpa90/podcast-transcriber}"
+TAG="${1:-latest}"
 SHA=$(git rev-parse --short HEAD)
+PUSH="${PUSH:-1}"
 
 docker buildx create --use --name multiarch 2>/dev/null || docker buildx use multiarch
 
-echo "==> Budowanie obrazów (PREFIX=$PREFIX, TAG=$TAG, SHA=$SHA, platforms=$PLATFORMS)"
+echo "==> $IMAGE:$TAG + $IMAGE:$SHA"
+if [[ "$PUSH" == "1" ]]; then
+  docker buildx build --platform linux/amd64,linux/arm64 \
+    -t "$IMAGE:$TAG" -t "$IMAGE:$SHA" --push .
+else
+  docker buildx build -t "$IMAGE:$TAG" --load .
+fi
 
-build_image() {
-  local name="$1"
-  local dockerfile="$2"
-  local target="${PREFIX}${name}:${TAG}"
-  local version_target="${PREFIX}${name}:${SHA}"
-  echo "--> $target + $version_target"
-  if [[ "$PUSH" == "1" ]]; then
-    docker buildx build --platform "$PLATFORMS" -f "$dockerfile" -t "$target" -t "$version_target" --push .
-  else
-    docker buildx build --platform "$PLATFORMS" -f "$dockerfile" -t "$target" -t "$version_target" --load . 2>/dev/null \
-      || docker buildx build --platform linux/arm64 -f "$dockerfile" -t "$target" -t "$version_target" --load .
-  fi
-}
-
-build_image "podcast-web"               "web/Dockerfile"
-build_image "podcast-worker-controller" "worker_controller/Dockerfile"
-build_image "podcast-transcriber"       "transcriber/Dockerfile"
-
-echo ""
-echo "Gotowe. Obrazy:"
-for svc in web worker-controller transcriber; do
-  echo "  ${PREFIX}podcast-${svc}:${TAG}"
-done
+echo "Gotowe. Rollback: podmien :latest na :$SHA w compose.yaml"

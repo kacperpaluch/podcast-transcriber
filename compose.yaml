@@ -1,0 +1,19 @@
+name: podcast
+
+services:
+  podcast:
+    image: kpa90/podcast-transcriber:latest
+    container_name: podcast
+    restart: unless-stopped
+    ports:
+      - "8130:8080"
+    volumes:
+      - /root/aplikacje/podcast:/data
+    environment:
+      - TZ=Europe/Warsaw
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      # Zmierzone na Ryzen 5 7530U: wiecej watkow nie przyspiesza. Patrz BENCHMARKS.md.
+      - CPU_THREADS=4
+      # Po tylu sekundach bezczynnosci model jest zwalniany z RAM.
+      - IDLE_UNLOAD_SECS=300
+    mem_limit: 3g

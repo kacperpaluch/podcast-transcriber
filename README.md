@@ -1,60 +1,54 @@
 # Podcast Transcriber
 
-[![Docker Hub](https://img.shields.io/docker/pulls/kpa90/podcast-web?logo=docker&label=Docker%20Hub)](https://hub.docker.com/r/kpa90/podcast-web)
+[![Docker Hub](https://img.shields.io/docker/pulls/kpa90/podcast-transcriber?logo=docker&label=Docker%20Hub)](https://hub.docker.com/r/kpa90/podcast-transcriber)
 
-Lokalny serwis przygotowania i transkrypcji podcastów dla Raspberry Pi 4/5 (8 GB RAM). Przyjmuje URL pliku audio przez API; może transkrybować go lokalnie (faster-whisper lub Parakeet) albo przygotować małe pliki MP3 dla zewnętrznego STT. Monitorowanie RSS, wybór dostawcy STT, podsumowanie i Telegram pozostają w n8n.
+Lokalna transkrypcja podcastów dla n8n. Przyjmuje URL pliku audio, transkrybuje
+go na CPU (faster-whisper) i odsyła gotowy tekst na webhook.
 
-## Architektura
+Cała aplikacja to **jeden plik, jeden kontener, jeden proces** — kolejka, API
+i model w środku. RSS, podsumowania i powiadomienia zostają po stronie n8n.
 
 ```
-n8n (RSS + logika) → POST /api/transcribe → kolejka SQLite → worker-controller → transcriber → webhook n8n
-
-n8n (RSS + zewnętrzny STT) → POST /api/prepare → kolejka SQLite → FFmpeg → webhook z manifestem → wybrany STT w n8n
+n8n → POST /api/transcribe → kolejka SQLite → whisper → webhook z transkryptem → n8n
 ```
-
-| Kontener | Rola | RAM |
-|---|---|---|
-| `podcast-web` | UI + REST API (FastAPI, port 8080) | ~150 MB |
-| `podcast-worker-controller` | FIFO queue, uruchamia transkryber sekwencyjnie | ~100 MB |
-| `podcast-transcriber` | faster-whisper CPU, uruchamiany on-demand (`--rm`) | ~2–2,5 GB |
-
-**Transkrypcje są zawsze sekwencyjne** — gwarantuje to stabilne ~2,5 GB RAM szczytowo niezależnie od liczby odcinków w kolejce.
 
 ## Wymagania
 
-- Raspberry Pi 4 lub 5, **8 GB RAM**, Raspberry Pi OS 64-bit (ARM64)
-- Docker + Docker Compose v2
-- Dostęp do internetu
-- n8n do obsługi RSS i dalszego przetwarzania transkrypcji
+- Docker z Compose v2
+- x86_64 lub ARM64, **4+ rdzenie**, ~2 GB wolnego RAM na czas transkrypcji
+- ~2 GB miejsca na model (pobiera się sam przy pierwszym uruchomieniu)
 
 ## Uruchomienie
 
-### 1. Sklonuj repozytorium
-
 ```bash
-git clone https://codeberg.org/kp90/podcast-transcriber.git
+git clone git@github.com:kacperpaluch/podcast-transcriber.git
 cd podcast-transcriber
+WEBHOOK_URL=https://twoj-n8n/webhook/xxx docker compose up -d
 ```
 
-### 2. Uruchom
+UI (lista ostatnich zadań) na `http://<host>:8130`.
 
-```bash
-HOST_DATA_PATH=$(pwd)/data docker compose up -d
-```
+Dane trzymane są w katalogu zamontowanym jako `/data` — baza `app.db`, pobrane
+audio w `audio/` (kasowane po transkrypcji) i cache modelu w `models/`.
 
-Przy pierwszym uruchomieniu model Whisper (~800 MB) zostanie pobrany automatycznie do `./data/models/` i będzie używany przy kolejnych uruchomieniach.
+## Konfiguracja
 
-### 3. Otwórz UI
+Wszystko przez zmienne środowiskowe w `compose.yaml`:
 
-```
-http://<adres-pi>:8080
-```
+| Zmienna | Domyślnie | Opis |
+|---|---|---|
+| `WEBHOOK_URL` | — | Adres, na który leci gotowy transkrypt. Pusty = tylko zapis do bazy. |
+| `MODEL` | `large-v3-turbo` | Model faster-whisper. |
+| `CPU_THREADS` | `4` | Wątki CTranslate2 i limit rdzeni. Zwiększanie **nie przyspiesza** — patrz [BENCHMARKS.md](BENCHMARKS.md). |
+| `IDLE_UNLOAD_SECS` | `300` | Po tylu sekundach pustej kolejki model jest zwalniany z RAM. |
+| `MAX_ATTEMPTS` | `3` | Po tylu nieudanych próbach zadanie dostaje status `error` zamiast wracać do kolejki. |
+| `DB_PATH`, `AUDIO_DIR`, `MODELS_DIR` | `/data/...` | Ścieżki wewnątrz kontenera. |
 
 ## API
 
-### POST /api/transcribe
+### `POST /api/transcribe`
 
-Kolejkuje nową transkrypcję. Zwraca `202 Accepted` z `job_id`.
+Dodaje zadanie do kolejki. Zwraca `202` i `job_id`.
 
 ```json
 {
@@ -64,172 +58,79 @@ Kolejkuje nową transkrypcję. Zwraca `202 Accepted` z `job_id`.
   "feed_name": "Nazwa kanału",
   "rss_feed_title": "Tytuł kanału z RSS",
   "feed_url": "https://example.com/rss.xml",
-  "guid": "opcjonalny-unikalny-id",
-  "published_at": "2026-06-01T10:00:00+00:00",
-  "duration_seconds": 3600
+  "guid": "unikalny-id",
+  "published_at": "2026-09-01T10:00:00+00:00"
 }
 ```
 
-Odpowiedź: `{"job_id": 42}`
+Wymagany jest tylko `audio_url`. `language` pominięty = automatyczne wykrycie.
+`guid` musi być unikalny — powtórzony zwraca `409`, co daje deduplikację za darmo.
 
-### GET /api/jobs/{job_id}
+### `GET /api/jobs/{job_id}`
 
-Zwraca status transkrypcji lub przygotowania audio: `queued`, `preparing`, `prepared`, `transcribing`, `done`, `error` oraz `progress_pct`.
+Zwraca wiersz zadania: `status` (`queued`, `running`, `done`, `error`),
+`progress_seconds`, `duration_seconds`, `transcript`, `error`.
 
-### POST /api/prepare
+### `GET /`
 
-Kolejkuje pobranie i przygotowanie audio do zewnętrznego STT. Endpoint jest przeznaczony do użycia wyłącznie w prywatnej sieci domowej.
+Strona HTML z listą 50 ostatnich zadań i ich postępem.
 
-Żądanie ma ten sam format co `/api/transcribe`. Worker pobiera audio bezpośrednio z URL, koduje je do MP3 mono 16 kHz / 32 kbps i dzieli domyślnie na części po 60 minut (około 14–15 MB na godzinę, poniżej limitu 25 MB). Po przygotowaniu wysyła skonfigurowany webhook do n8n z `event: "audio_prepared"`, `job_id` i manifestem chunków.
+## Webhook
 
-### GET /api/jobs/{job_id}/chunks/{chunk_index}
-
-Pobiera pojedynczy przygotowany MP3 dla n8n w prywatnej sieci domowej.
-
-### POST /api/jobs/{job_id}/cleanup
-
-Usuwa przygotowane pliki po pomyślnej transkrypcji i podsumowaniu w n8n.
-
-### DELETE /api/episodes/{episode_id}
-
-Trwale usuwa zakończony, błędny lub przygotowany do zewnętrznego STT odcinek oraz jego pliki robocze. Dzięki temu ten sam GUID można ponownie uruchomić z RSS przez nową ścieżkę zewnętrznego STT. Endpoint nie pozwala usuwać zadań `queued`, `preparing` ani `transcribing`.
-
-W tabeli odcinków na **Panelu głównym** odpowiada mu przycisk **Usuń** z potwierdzeniem; działa też dla pozycji `prepared`, usuwając jej chunki i odblokowując GUID. Przycisk **Usuń całą historię** usuwa przygotowane do zewnętrznego STT, zakończone, błędne i pominięte odcinki; zadania `queued`, `preparing` i `transcribing` pozostają nienaruszone. Przycisk **Transkrybuj ponownie** zachowuje istniejący tryb zadania; aby przełączyć historyczny odcinek na nową ścieżkę, najpierw wybierz **Usuń**, a następnie uruchom go ponownie w n8n.
-
-## Konfiguracja
-
-Przez interfejs webowy:
-
-1. **Ustawienia** → model transkrypcji, URL webhooka n8n
-2. **Dodaj transkrypcję** → wybór: lokalna transkrypcja (domyślna) albo **FFmpeg → chunki → webhook n8n/zewnętrzny STT**
-3. **Panel główny** → statystyki, aktywna transkrypcja, pełna lista odcinków sortowana chronologicznie, filtrowanie i bezpieczne czyszczenie historii
-4. **Historia webhooków** → log wysłanych webhooków z możliwością ponownego wysłania
-
-### Modele Whisper
-
-| Model | Jakość | Czas (1h audio) | RAM |
-|---|---|---|---|
-| `large-v3-turbo` | ★★★★ (domyślny) | ~20–30 min | ~2 GB |
-| `large-v3` | ★★★★★ | ~40–60 min | ~2,5 GB |
-| `medium` | ★★★ | ~10–15 min | ~1,5 GB |
-| `small` | ★★ | ~5–8 min | ~1 GB |
-
-### Wątki CPU
-
-CTranslate2 domyślnie używa **4 wątków** niezależnie od liczby rdzeni maszyny.
-`WHISPER_CPU_THREADS` ustawia zarówno `cpu_threads` modelu, jak i limit `--cpus`
-kontenera transkrybera, żeby transkrypcja nie zagłodziła pozostałych usług na hoście.
-
-```yaml
-environment:
-  - WHISPER_CPU_THREADS=4
-```
-
-**Zwiększanie tej wartości nie przyspiesza transkrypcji.** Zmierzone na Ryzen 5 7530U
-(6C/12T), `large-v3-turbo` int8, 57-minutowy odcinek:
-
-| Wątki | Prędkość | Zużycie CPU |
-|---|---|---|
-| 4 | 2,69× realtime | 383% |
-| 8 | 2,67× realtime | 555% |
-
-Wąskim gardłem jest przepustowość pamięci, nie liczba rdzeni — int8 w kółko przelatuje
-przez wagi modelu. Dlatego domyślne 4 daje tę samą prędkość mniejszym kosztem.
-
-### Parakeet (eksperymentalnie)
-
-Jako alternatywę dla Whispera można wybrać `parakeet-tdt-0.6b-v3` (NVIDIA Parakeet TDT, 25 języków EU w tym polski). Dekoder TDT jest nieautoregresyjny, więc na CPU bywa szybszy niż Whisper. Kontener uruchamiany jest on-demand przez worker-controller i zamykany po zakończeniu.
-
-Uwagi dot. Raspberry Pi:
-
-- Audio dzielone na fragmenty 2-minutowe (`PARAKEET_CHUNK_SECS`) — bez tego dochodzi do OOM
-- Kontener dostaje limit 4 GB RAM z **wyłączonym swapem** (`--memory-swap=4g`)
-- Język musi być podany jawnie w żądaniu (`language` w POST /api/transcribe)
-
-## Integracja z n8n
-
-### Flow 1 — lokalna transkrypcja (dotychczasowy)
-
-```
-RSS Feed Trigger → HTTP Request POST /api/transcribe
-```
-
-n8n wysyła POST i nie czeka na wynik (fire & forget). Transkrypcja trwa 20–60 minut.
-
-### Flow 2 — odbiór gotowej transkrypcji
-
-```
-Webhook Trigger (stały URL) → odbiera transkrypcję → przetwarza dalej
-```
-
-Ustaw ten URL jako **URL webhooka** w Ustawieniach aplikacji. Po każdej transkrypcji aplikacja automatycznie wysyła wynik na ten adres.
-
-### Flow 3 — zewnętrzny STT w n8n (rekomendowany)
-
-```
-RSS Feed Trigger → HTTP Request POST /api/prepare → webhook audio_prepared
-→ pobierz każdy chunk → wybrany endpoint STT → scal tekst
-→ podsumowanie → Telegram → POST /api/jobs/{job_id}/cleanup
-```
-
-Trzy żądania serwisu (`/api/prepare`, pobieranie chunków, `/cleanup`) nie wymagają credentialu; są przeznaczone dla prywatnej sieci domowej. Klucz do wybranego dostawcy STT pozostaje w credentialu skonfigurowanym przez użytkownika w n8n.
-
-## Webhook payload
+Po zakończeniu transkrypcji aplikacja wysyła `POST` na `WEBHOOK_URL`:
 
 ```json
 {
-  "event": "audio_prepared",
-  "job_id": 42,
-  "feed_name": "Nazwa kanału",
-  "rss_feed_title": "Tytuł kanału z RSS",
-  "feed_url": "https://.../rss.xml",
-  "episode_title": "Tytuł odcinka",
-  "guid": "unikalny-id",
-  "audio_url": "https://.../odcinek.mp3",
-  "published_at": "2026-06-01T10:00:00+00:00",
-  "language": "pl",
-  "duration_seconds": 3600,
-  "chunks": [
-    {"index": 0, "file_name": "chunk_000.mp3", "size_bytes": 14400000, "start_seconds": 0, "duration_seconds": 3600}
-  ]
+  "event": "transcription_completed",
+  "feed_name": "...", "rss_feed_title": "...", "feed_url": "...",
+  "episode_title": "...", "guid": "...", "audio_url": "...",
+  "published_at": "...", "language": "pl", "duration_seconds": 3408,
+  "transcript": "pełna treść..."
 }
 ```
 
-## Portainer / wdrożenie bez budowania
+Przy niepowodzeniu ponawia 5 razy z narastającym odstępem (5 s → 2 min). Jeśli
+wszystkie próby zawiodą, transkrypt zostaje w bazie, a zadanie dostaje adnotację
+w polu `error` — nic nie ginie, można odczytać przez `GET /api/jobs/{id}`.
 
-Użyj pliku `docker-compose.portainer.yml` — korzysta z gotowych obrazów z Docker Hub, bez potrzeby budowania lokalnie. Ustaw zmienną `HOST_DATA_PATH` na absolutną ścieżkę do katalogu danych na hoście.
+**Kształt tego payloadu to kontrakt z n8n.** Zmiana wymaga zmiany workflow;
+`test_app.py` pilnuje, żeby nie stało się to przypadkiem.
 
-## Dane
+## Jak to działa
 
-| Ścieżka | Zawartość |
-|---|---|
-| `data/app.db` | SQLite: odcinki, ustawienia, logi webhooków |
-| `data/audio/` | Tymczasowe pliki audio (usuwane po wysłaniu webhooka) |
-| `data/models/` | Cache modeli Whisper |
+Jeden wątek roboczy bierze najstarsze zadanie ze statusem `queued`, pobiera
+audio, transkrybuje i wysyła webhook. Sekwencyjność nie jest ustawieniem, tylko
+konsekwencją jednego wątku — dzięki temu zużycie RAM jest stałe niezależnie od
+tego, ile odcinków czeka w kolejce.
 
-## Logi
+Model ładuje się przy pierwszym zadaniu i jest zwalniany po `IDLE_UNLOAD_SECS`
+bezczynności. Bezczynna aplikacja zajmuje ~100 MB, w trakcie pracy ~1,4 GB.
+
+Po restarcie zadania ze statusem `running` wracają do kolejki. Licznik `attempts`
+chroni przed pętlą: zadanie, które `MAX_ATTEMPTS` razy ubiło proces (np. przez
+OOM), ląduje jako `error` zamiast restartować aplikację w nieskończoność.
+
+## Wydajność
+
+Na AMD Ryzen 5 7530U (6C/12T) z modelem `large-v3-turbo`: **~2,7× realtime**,
+czyli godzinny odcinek w ~21 minut, przy ~1,4 GB RAM.
+
+Przetestowano osiem konfiguracji i cztery alternatywne silniki (Parakeet TDT,
+Qwen3-ASR, whisper `medium`/`small`) — komplet pomiarów wraz z porównaniem
+jakości polskich transkrypcji jest w [BENCHMARKS.md](BENCHMARKS.md).
+Najkrótsze streszczenie: **nic nie pobiło `large-v3-turbo`**, a dokręcanie
+liczby wątków, batchingu czy `beam_size` nie daje nic, bo wąskim gardłem jest
+przepustowość pamięci.
+
+## Rozwój
 
 ```bash
-docker compose logs -f worker-controller
-docker compose logs -f web
+docker build -t podcast:dev .
+docker run --rm -v "$PWD/test_app.py:/app/test_app.py:ro" podcast:dev python test_app.py
 ```
 
-## Bezpieczeństwo
-
-`worker-controller` wymaga dostępu do Docker socket (`/var/run/docker.sock`) — daje to efektywnie uprawnienia root na hoście. Akceptowalne na prywatnym Raspberry Pi, nie wystawiaj portu 8080 publicznie bez uwierzytelnienia.
-
-Endpointy przygotowania audio nie mają uwierzytelnienia; nie wystawiaj portu 8033 poza prywatną sieć domową.
-
-## Build i push na Docker Hub
+Publikacja obrazu (multi-arch, `latest` + tag z SHA do rollbacku):
 
 ```bash
-./build-push.sh <login-dockerhub>          # build + push :latest + :<git-sha>
-./build-push.sh <login-dockerhub> 1.0.0    # build + push z tagiem wersji + :<git-sha>
-PUSH=0 ./build-push.sh <login-dockerhub>   # tylko build lokalny
+./build-push.sh
 ```
-
-Każdy build taguje obraz dwoma tagami: `:latest` (ruchomy) + `:<git-sha>` (stały backup do rollbacku).
-
-## Historia zmian
-
-- **2026-06-19** — porządki: usunięto nieużywaną zależność `python-multipart` z web, martwy wewnętrzny import `json` w worker-controller, komentarz opisujący niezaimplementowany timeout. Brak zmian w API.
