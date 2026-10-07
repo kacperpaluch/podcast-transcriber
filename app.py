@@ -72,8 +72,12 @@ def init_db():
                 pass
         # Zadania zakonczone przed wprowadzeniem kolejki webhookow maja swoje
         # webhooki juz wyslane — bez tego aktualizacja zalalaby n8n powtorkami.
+        # Wyjatek: te, ktore stary kod oznaczyl jako nieudane, trzeba doslac.
         if migrated:
-            c.execute("UPDATE jobs SET webhook_ok=1 WHERE status='done'")
+            c.execute("UPDATE jobs SET webhook_ok=1 WHERE status='done' AND error IS NULL")
+        # Bez indeksu szukanie zaleglych webhookow czyta transkrypt kazdego zadania.
+        c.execute("CREATE INDEX IF NOT EXISTS jobs_webhook_pending ON jobs(webhook_after) "
+                  "WHERE status='done' AND webhook_ok=0")
         # Po restarcie dokończ to, co było w locie — ale zadanie, które ubiło
         # proces MAX_ATTEMPTS razy (np. przez OOM), odkłada się na bok zamiast
         # restartować aplikację w nieskończoność.
@@ -112,7 +116,7 @@ def try_webhook(job_id: int):
     n = row["webhook_attempts"] + 1
     try:
         r = httpx.post(WEBHOOK_URL, json=payload_for(row), timeout=30)
-        if r.status_code < 400:
+        if r.is_success:
             log.info("Webhook OK (%s) dla zadania %d", r.status_code, job_id)
             with db() as c:
                 c.execute("UPDATE jobs SET webhook_ok=1, webhook_attempts=?, error=NULL "
@@ -194,7 +198,6 @@ def process(model, job_id: int):
     with db() as c:
         c.execute("UPDATE jobs SET transcript=?, status='done' WHERE id=?", (text, job_id))
     log.info("Gotowe: zadanie %d, %d znaków", job_id, len(text))
-    try_webhook(job_id)
 
 
 def worker():
@@ -203,33 +206,40 @@ def worker():
     trwa ~3 s, więc przy serii odcinków płaci się za nie raz."""
     model, idle_since = None, time.time()
     while True:
-        with db() as c:
-            row = c.execute(
-                "SELECT id FROM jobs WHERE status='queued' ORDER BY id LIMIT 1").fetchone()
-        if not row:
+        try:
+            # Webhooki ida miedzy zadaniami, zeby dluga kolejka ich nie wstrzymywala.
             late = pending_webhook()
             if late:
                 try_webhook(late["id"])
-                continue
-            if model is not None and time.time() - idle_since > IDLE_UNLOAD_SECS:
-                log.info("Kolejka pusta — zwalniam model")
-                model = None
-                gc.collect()
-            time.sleep(5)
-            continue
-        if model is None:
-            log.info("Ładuję model %s (int8, %d wątki)", MODEL, CPU_THREADS)
-            from faster_whisper import WhisperModel
-            model = WhisperModel(MODEL, device="cpu", compute_type="int8",
-                                 download_root=MODELS_DIR, cpu_threads=CPU_THREADS)
-        try:
-            process(model, row["id"])
-        except Exception as e:
-            log.exception("Zadanie %d nieudane", row["id"])
             with db() as c:
-                c.execute("UPDATE jobs SET status='error', error=? WHERE id=?",
-                          (str(e)[:500], row["id"]))
-        idle_since = time.time()
+                row = c.execute(
+                    "SELECT id FROM jobs WHERE status='queued' ORDER BY id LIMIT 1").fetchone()
+            if not row:
+                if late:
+                    continue
+                if model is not None and time.time() - idle_since > IDLE_UNLOAD_SECS:
+                    log.info("Kolejka pusta — zwalniam model")
+                    model = None
+                    gc.collect()
+                time.sleep(5)
+                continue
+            if model is None:
+                log.info("Ładuję model %s (int8, %d wątki)", MODEL, CPU_THREADS)
+                from faster_whisper import WhisperModel
+                model = WhisperModel(MODEL, device="cpu", compute_type="int8",
+                                     download_root=MODELS_DIR, cpu_threads=CPU_THREADS)
+            try:
+                process(model, row["id"])
+            except Exception as e:
+                log.exception("Zadanie %d nieudane", row["id"])
+                with db() as c:
+                    c.execute("UPDATE jobs SET status='error', error=? WHERE id=?",
+                              (str(e)[:500], row["id"]))
+            idle_since = time.time()
+        except Exception:
+            # Watek jest jedyny — blad bazy czy pobierania modelu nie moze go ubic.
+            log.exception("Błąd pętli roboczej, ponawiam za 5 s")
+            time.sleep(5)
 
 
 app = FastAPI(title="Podcast Transcriber")
@@ -263,7 +273,15 @@ def queue(job: Job):
                 f"INSERT INTO jobs({','.join(FIELDS)}) VALUES({','.join('?' * len(FIELDS))})",
                 vals)
         except sqlite3.IntegrityError:
-            raise HTTPException(409, f"guid '{job.guid}' już istnieje")
+            # Zadanie zakonczone bledem wraca do kolejki zamiast blokowac swoj guid.
+            done = c.execute(
+                f"UPDATE jobs SET status='queued', error=NULL, attempts=0, progress_seconds=0, "
+                f"{','.join(f + '=?' for f in FIELDS)} WHERE guid=? AND status='error'",
+                vals + [job.guid]).rowcount
+            if not done:
+                raise HTTPException(409, f"guid '{job.guid}' już istnieje")
+            return {"job_id": c.execute("SELECT id FROM jobs WHERE guid=?",
+                                        (job.guid,)).fetchone()["id"]}
     return {"job_id": cur.lastrowid}
 
 

@@ -67,6 +67,7 @@ Dodaje zadanie do kolejki. Zwraca `202` i `job_id`.
 
 Wymagany jest tylko `audio_url`. `language` pominięty = automatyczne wykrycie.
 `guid` musi być unikalny — powtórzony zwraca `409`, co daje deduplikację za darmo.
+Wyjątek: zadanie ze statusem `error` zgłoszone ponownie wraca do kolejki.
 
 ### `GET /api/jobs/{job_id}`
 

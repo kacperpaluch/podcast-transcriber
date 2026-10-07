@@ -66,12 +66,63 @@ with app.db() as c:
     c.execute("UPDATE jobs SET webhook_attempts=? WHERE id=?", (app.WEBHOOK_MAX_ATTEMPTS, jid))
 assert app.pending_webhook() is None
 
+# Lokalny serwer: GET oddaje 2 MB, POST odpowiada 200 albo 301 zaleznie od sciezki.
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        self.send_response(200); self.send_header("Content-Length", str(2 << 20))
+        self.end_headers(); self.wfile.write(b"\0" * (2 << 20))
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(301 if self.path == "/redir" else 200)
+        self.send_header("Location", "/ok"); self.send_header("Content-Length", "0")
+        self.end_headers()
+
+srv = HTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+base = f"http://127.0.0.1:{srv.server_port}"
+
+def hook(path):
+    app.WEBHOOK_URL = base + path
+    with app.db() as c:
+        c.execute("UPDATE jobs SET webhook_attempts=0, webhook_after=0 WHERE id=?", (jid,))
+    app.try_webhook(jid)
+    with app.db() as c:
+        return c.execute("SELECT webhook_ok,error FROM jobs WHERE id=?", (jid,)).fetchone()
+
+# Przekierowanie to nie dostarczenie — n8n niczego nie dostal.
+assert hook("/redir")["webhook_ok"] == 0
+r = hook("/ok")
+assert r["webhook_ok"] == 1 and r["error"] is None, dict(r)
+
 # Limit rozmiaru pobierania jest egzekwowany.
-app.MAX_AUDIO_MB = 0
+audio = os.path.join(tempfile.mkdtemp(), "x.audio")
+app.MAX_AUDIO_MB = 1
 try:
-    app.download("http://127.0.0.1:1/big.mp3", "/tmp/x.audio")
-except Exception:
-    pass  # polaczenie odrzucone albo limit — obie sciezki koncza sie wyjatkiem
+    app.download(base + "/big.mp3", audio)
+    raise AssertionError("2 MB przeszlo przy limicie 1 MB")
+except ValueError:
+    pass
+app.MAX_AUDIO_MB = 3
+app.download(base + "/big.mp3", audio)
+assert os.path.getsize(audio) == 2 << 20
+
+# Zadanie zakonczone bledem mozna zglosic ponownie; kazde inne daje 409.
+with app.db() as c:
+    c.execute("INSERT INTO jobs(audio_url,guid,status,error,attempts) "
+              "VALUES('http://x/e.mp3','g5','error','boom',3)")
+app.queue(app.Job(audio_url="http://x/e2.mp3", guid="g5"))
+with app.db() as c:
+    r = c.execute("SELECT status,error,attempts,audio_url FROM jobs WHERE guid='g5'").fetchone()
+assert tuple(r) == ("queued", None, 0, "http://x/e2.mp3"), dict(r)
+try:
+    app.queue(app.Job(audio_url="http://x/e2.mp3", guid="g5"))
+    raise AssertionError("duplikat guid w kolejce musi dac 409")
+except app.HTTPException as e:
+    assert e.status_code == 409
 
 # Aktualizacja starej bazy nie moze wywolac lawiny powtorzonych webhookow.
 import sqlite3 as _s
@@ -83,12 +134,21 @@ _c.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, audio_url T
            " duration_seconds INTEGER, progress_seconds INTEGER, transcript TEXT, error TEXT,"
            " attempts INTEGER DEFAULT 0, created_at TEXT)")
 _c.execute("INSERT INTO jobs(audio_url,guid,status,transcript) VALUES('u','old1','done','t')")
+_c.execute("INSERT INTO jobs(audio_url,guid,status,transcript,error) "
+           "VALUES('u','old2','done','t','webhook nieudany')")
 _c.commit(); _c.close()
 os.environ["DB_PATH"] = old_db
 importlib.reload(app)
 app.init_db()
 with app.db() as c:
     assert c.execute("SELECT webhook_ok FROM jobs WHERE guid='old1'").fetchone()[0] == 1
-assert app.pending_webhook() is None, "stare zadania nie moga trafic do dosylania"
+# ...poza tymi, ktorych webhook pod starym kodem sie nie udal — te trzeba doslac.
+with app.db() as c:
+    old2 = c.execute("SELECT id FROM jobs WHERE guid='old2'").fetchone()[0]
+    plan = " ".join(r[3] for r in c.execute(
+        "EXPLAIN QUERY PLAN SELECT id FROM jobs WHERE status='done' AND webhook_ok=0 "
+        "AND webhook_attempts < 10 AND webhook_after <= 1 ORDER BY id LIMIT 1"))
+assert app.pending_webhook()["id"] == old2, "tylko nieudany stary webhook idzie do dosylania"
+assert "jobs_webhook_pending" in plan, plan
 
 print("OK")
