@@ -41,6 +41,7 @@ docker-compose-*.yml
 .claude/
 .codex/
 .opencode/
+.vibe/
 .skillbox/
 .mcp.json
 opencode.json
