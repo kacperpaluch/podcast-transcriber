@@ -12,6 +12,14 @@ services:
     environment:
       - TZ=Europe/Warsaw
       - WEBHOOK_URL=${WEBHOOK_URL}
+      # Model faster-whisper; nowy pobiera sie sam do /data/models przy pierwszym zadaniu.
+      # Do polskiego: large-v3-turbo (najlepszy kompromis, ~2,7x realtime),
+      # large-v3 (bez pomiaru: znacznie wolniejszy i wiecej RAM), medium (wolniejszy od turbo
+      # bez zysku jakosci), small (~2x szybszy, ale gubi nazwy wlasne).
+      # Unikaj wariantow *.en i distil-* — sa tylko po angielsku. Patrz BENCHMARKS.md.
+      # Gdy podanej nazwy nie da sie zaladowac, aplikacja bierze large-v3-turbo
+      # i pokazuje ostrzezenie w naglowku UI.
+      - MODEL=large-v3-turbo
       # Zmierzone na Ryzen 5 7530U: wiecej watkow nie przyspiesza. Patrz BENCHMARKS.md.
       - CPU_THREADS=4
       # Po tylu sekundach bezczynnosci model jest zwalniany z RAM.

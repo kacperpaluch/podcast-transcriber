@@ -28,8 +28,9 @@ WEBHOOK_URL=https://twoj-n8n/webhook/xxx docker compose up -d
 
 UI (lista ostatnich zadań) na `http://<host>:8130`.
 
-Dane trzymane są w katalogu zamontowanym jako `/data` — baza `app.db`, pobrane
-audio w `audio/` (kasowane po transkrypcji) i cache modelu w `models/`.
+Dane trzymane są w katalogu zamontowanym jako `/data` — baza `app.db`, gotowe
+transkrypty jako pliki `.txt` w `transcripts/`, pobrane audio w `audio/`
+(kasowane po transkrypcji) i cache modelu w `models/`.
 
 ## Konfiguracja
 
@@ -38,13 +39,13 @@ Wszystko przez zmienne środowiskowe w `compose.yaml`:
 | Zmienna | Domyślnie | Opis |
 |---|---|---|
 | `WEBHOOK_URL` | — | Adres, na który leci gotowy transkrypt. Pusty = tylko zapis do bazy. |
-| `MODEL` | `large-v3-turbo` | Model faster-whisper. |
+| `MODEL` | `large-v3-turbo` | Model faster-whisper. Do polskiego sensowne są `large-v3-turbo`, `large-v3`, `medium` i `small`; warianty `*.en` i `distil-*` znają tylko angielski. Wybór uzasadnia [BENCHMARKS.md](BENCHMARKS.md). Nazwa, której nie da się załadować, nie blokuje kolejki: wtedy działa `large-v3-turbo`, a UI pokazuje ostrzeżenie. |
 | `CPU_THREADS` | `4` | Wątki CTranslate2 i limit rdzeni. Zwiększanie **nie przyspiesza** — patrz [BENCHMARKS.md](BENCHMARKS.md). |
 | `IDLE_UNLOAD_SECS` | `300` | Po tylu sekundach pustej kolejki model jest zwalniany z RAM. |
 | `MAX_ATTEMPTS` | `3` | Ochrona przed pętlą restartów: jeśli zadanie tyle razy **ubiło cały proces** (np. przez OOM), dostaje status `error` zamiast wracać do kolejki. Zwykły wyjątek w trakcie transkrypcji kończy zadanie błędem od razu. |
 | `MAX_AUDIO_MB` | `1000` | Limit rozmiaru pobieranego pliku. Przekroczenie przerywa pobieranie. |
 | `WEBHOOK_MAX_ATTEMPTS` | `10` | Ile razy próbować dostarczyć webhook, zanim aplikacja odpuści. |
-| `DB_PATH`, `AUDIO_DIR`, `MODELS_DIR` | `/data/...` | Ścieżki wewnątrz kontenera. |
+| `DB_PATH`, `AUDIO_DIR`, `MODELS_DIR`, `TRANSCRIPTS_DIR` | `/data/...` | Ścieżki wewnątrz kontenera. |
 
 ## API
 
@@ -76,7 +77,25 @@ Zwraca wiersz zadania: `status` (`queued`, `running`, `done`, `error`),
 
 ### `GET /`
 
-Strona HTML z listą 50 ostatnich zadań i ich postępem.
+Podgląd: bieżąca transkrypcja z postępem, kolejka i 50 ostatnich zakończonych
+zadań. Odświeża się sama co 5 s.
+
+### `GET /jobs/{job_id}`
+
+Strona odcinka: status, błąd z podpowiedzią, jak ponowić, oraz transkrypt
+z przyciskiem kopiowania.
+
+### `POST /jobs/{job_id}/webhook`
+
+Wysyła webhook od nowa (licznik prób od zera) dla gotowego zadania, którego
+webhook nie doszedł. Na stronie odcinka to przycisk „Wyślij webhook ponownie”.
+
+## Pliki z transkryptami
+
+Każdy gotowy transkrypt trafia też do `/data/transcripts/<id> - <tytuł>.txt`.
+Przy starcie aplikacja dopisuje pliki dla transkryptów, które są w bazie, a na
+dysku ich brakuje — po aktualizacji pojawi się więc cała dotychczasowa historia.
+Źródłem prawdy pozostaje baza: nieudany zapis pliku tylko loguje błąd.
 
 ## Webhook
 
@@ -98,8 +117,9 @@ rosną: 5 s → 15 s → 30 s → 1 min → 2 min → 5 min → 15 min → 1 h, 
 `WEBHOOK_MAX_ATTEMPTS` prób. Dzięki temu restart n8n trwający godzinę nie gubi
 niczego.
 
-Gdyby wszystkie próby zawiodły, transkrypt zostaje w bazie z opisem w polu
-`error` i da się go odczytać przez `GET /api/jobs/{id}`.
+Gdyby wszystkie próby zawiodły, transkrypt zostaje w bazie i w pliku `.txt`,
+z opisem w polu `error`. Na stronie odcinka można wtedy wysłać webhook
+jeszcze raz.
 
 **Kształt tego payloadu to kontrakt z n8n.** Zmiana wymaga zmiany workflow;
 `test_app.py` pilnuje, żeby nie stało się to przypadkiem.

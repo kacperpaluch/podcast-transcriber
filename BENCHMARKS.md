@@ -25,7 +25,9 @@ przed ekranem** i różnica 21 vs 8 minut jest niewidoczna. Za to przekręcone
 nazwisko gościa trafia do każdego podsumowania jako zmyślony fakt.
 
 Gdyby kiedyś liczyła się przepustowość (nadrabianie zaległego archiwum),
-przełącznikiem jest jedno ustawienie w UI — Parakeet jest gotowy i przetestowany.
+Parakeet jest przetestowany, ale nie ma go już w aplikacji — obsługę usunięto
+przy uproszczeniu do jednego pliku (patrz uwaga na końcu sekcji o jakości).
+Prościej odpalić go jednorazowo osobno, niż przywracać drugi silnik.
 
 ## Sprzęt
 

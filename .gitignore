@@ -2,6 +2,7 @@
 data/app.db
 data/audio/*
 data/models/*
+data/transcripts/
 !data/audio/.gitkeep
 !data/models/.gitkeep
 
@@ -32,6 +33,9 @@ env/
 
 # Docker
 *.log
+*.tmp
+.env.local
+.pytest_cache/
 
 # Lokalne konfiguracje (nie commituj)
 docker-compose-*.yaml

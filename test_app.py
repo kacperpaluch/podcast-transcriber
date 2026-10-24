@@ -4,6 +4,7 @@ import os, tempfile, sqlite3
 os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
 os.environ["AUDIO_DIR"] = tempfile.mkdtemp()
 os.environ["MODELS_DIR"] = tempfile.mkdtemp()
+os.environ["TRANSCRIPTS_DIR"] = TXT = tempfile.mkdtemp()
 import app
 
 app.init_db()
@@ -25,6 +26,8 @@ with app.db() as c:
 app.init_db()
 with app.db() as c:
     assert c.execute("SELECT status FROM jobs WHERE guid='g2'").fetchone()[0] == "queued"
+# Start dopisuje pliki .txt dla gotowych transkryptow, ktorych jeszcze nie ma na dysku.
+assert open(os.path.join(TXT, "1 - Tytul.txt"), encoding="utf-8").read() == "tekst"
 
 # Zadanie, ktore ubilo proces MAX_ATTEMPTS razy, nie moze wracac do kolejki
 # w nieskonczonosc — inaczej OOM restartuje aplikacje bez konca.
@@ -150,5 +153,51 @@ with app.db() as c:
         "AND webhook_attempts < 10 AND webhook_after <= 1 ORDER BY id LIMIT 1"))
 assert app.pending_webhook()["id"] == old2, "tylko nieudany stary webhook idzie do dosylania"
 assert "jobs_webhook_pending" in plan, plan
+
+# UI: kazdy stan sie renderuje, tresc z n8n jest escapowana, a link do audio
+# z innym schematem niz http(s) nie trafia do href.
+with app.db() as c:
+    c.execute("INSERT INTO jobs(audio_url,guid,episode_title,status,transcript,webhook_ok,"
+              "created_at) VALUES('javascript:alert(1)','u1','<b>x</b>','done','a\nb',1,"
+              "datetime('now'))")
+    c.execute("INSERT INTO jobs(audio_url,guid,status,duration_seconds,progress_seconds) "
+              "VALUES('http://x/odc%201.mp3','u2','running',3600,900)")
+    ui = c.execute("SELECT id FROM jobs WHERE guid='u1'").fetchone()[0]
+    run = c.execute("SELECT id FROM jobs WHERE guid='u2'").fetchone()[0]
+home = app.index().body.decode()
+assert "&lt;b&gt;x&lt;/b&gt;" in home and "<b>x</b>" not in home
+assert "odc 1.mp3" in home and "25%" in home, "brak tytulu = nazwa pliku; postep w %"
+detail = app.job_page(ui).body.decode()
+assert "javascript:" not in detail and "<p>a b</p>" in detail
+assert "data-live" in app.job_page(run).body.decode()
+assert app.job_page(10**6).status_code == 404
+with app.db() as c:
+    app.save_txt(c.execute("SELECT * FROM jobs WHERE id=?", (ui,)).fetchone())
+assert os.path.exists(os.path.join(TXT, f"{ui} - _b_x__b_.txt")), os.listdir(TXT)
+
+# Webhook po wyczerpaniu prob mozna wyslac od nowa; dostarczonego nie rusza.
+with app.db() as c:
+    c.execute("UPDATE jobs SET webhook_ok=0, webhook_attempts=?, error='x' WHERE id=?",
+              (app.WEBHOOK_MAX_ATTEMPTS, ui))
+assert "Wyślij webhook ponownie" in app.job_page(ui).body.decode()
+assert app.resend_webhook(ui).status_code == 303
+with app.db() as c:
+    r = c.execute("SELECT webhook_ok,webhook_attempts,webhook_after,error FROM jobs WHERE id=?",
+                  (ui,)).fetchone()
+assert tuple(r) == (0, 0, 0, None), dict(r)
+
+# Literowka w MODEL laduje model domyslny zamiast blokowac kolejke.
+import faster_whisper
+class FakeModel:
+    def __init__(self, name, **kw):
+        if name != app.DEFAULT_MODEL:
+            raise ValueError("Invalid model size")
+        self.name = name
+faster_whisper.WhisperModel, app.MODEL = FakeModel, "large-v3-trubo"
+assert app.load_model().name == app.DEFAULT_MODEL
+assert "MODEL=large-v3-trubo" in app.model_note and "MODEL=large-v3-trubo" in app.index().body.decode()
+app.MODEL = app.DEFAULT_MODEL
+app.load_model()
+assert app.model_note == ""
 
 print("OK")
